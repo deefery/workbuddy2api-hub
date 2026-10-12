@@ -179,95 +179,68 @@ Gate C evidence:
 - forced container recreation recovered healthy and preserved the exact settings-file hash;
 - no public exposure or router change was made.
 
-Real account/protocol acceptance remains deliberately in T-005 rather than being hidden inside deployment PASS.## 8. T-005 — Real Functional + Persistence Acceptance
+Real account/protocol acceptance remains deliberately in T-005 rather than being hidden inside deployment PASS.
 
-### Outcome
+## 8. T-005 — Real Functional + Persistence Acceptance — PASS
 
-Prove the deployed candidate is actually usable for the intended WorkBuddy gateway workload and survives the lifecycle operations expected during upgrades.
+### Gate D result
 
-### Minimum functional matrix
+Completed 2026-10-13 against the deployed `v1.7.2.1` candidate.
 
-- dashboard reachable from intended LAN client;
-- default/admin credential posture corrected before acceptance;
-- API bearer-key enforcement behaves correctly;
-- real WorkBuddy account can be added through the supported server/browser flow;
-- account status and model catalog are usable;
-- `GET /v1/models` succeeds with authorization;
-- OpenAI Chat Completions: one non-stream request;
-- OpenAI Chat Completions: one stream request;
-- OpenAI Responses: one simple real request;
-- Anthropic Messages: one simple real request, unless Architect explicitly downgrades it to a documented secondary/non-blocking capability;
-- at least two model routes are exercised when the connected account makes them available;
-- usage/account state is persisted.
+- dashboard reachable from the intended LAN client;
+- default panel password corrected (`panel_default=False`);
+- API bearer-key enforcement confirmed;
+- two real WorkBuddy accounts added and both ready;
+- authenticated `/v1/models` returned 21 models;
+- Chat Completions non-stream PASS;
+- Chat Completions stream PASS with SSE data and `[DONE]`;
+- Responses API PASS;
+- Anthropic Messages PASS;
+- two real model routes exercised: `gpt-5.6-sol` and `gpt-6.1-sol`;
+- four real requests persisted to `usage/usage.jsonl` with token/latency accounting;
+- after real state existed, both `compose down/up` and `compose up -d --force-recreate` preserved settings and usage hashes exactly and returned both accounts to ready;
+- container remained healthy with RestartCount 0;
+- short resource observations showed no runaway CPU, immediate memory instability, PID growth, or recurring fatal/storage errors.
 
-### Persistence lifecycle
+Evidence: `.ai/reviews/T-005-review.md`.
 
-After creating real state:
+**Gate D: PASS.**
 
-1. record account/settings/usage baseline;
-2. stop/down and start/up the deployment;
-3. confirm account/settings/API key/usage state persists;
-4. force container recreation using the same reviewed image;
-5. confirm state still persists.
+## 9. T-006 — Production Closeout — PASS
 
-### Resource/stability sanity
+### Accepted baseline
 
-Observe enough real requests to confirm:
+- source commit: `fbd06b779991bad3c716f193a96deadfcb35cd71`;
+- release tag: `v1.7.2.1`;
+- GHCR image: `ghcr.io/deefery/workbuddy2api-hub:v1.7.2.1`;
+- OCI RepoDigest: `sha256:cc6cf1cd0896bd8f55979532d5c1b94aae8369ed596abc672cdbb8197b2bc697`;
+- NAS image ID: `sha256:fea841559e6ed5f9f529f1709365a5d7f4678218d18fbb71ce1d4af9ebf6000d`;
+- NAS path: `/share/Container/workbuddy2api-hub`;
+- container: `wb-proxy`;
+- persistent paths: `data/accounts`, `data/usage`;
+- port: `8788 -> 8788`;
+- current health: running / healthy;
+- baseline network boundary: LAN-only;
+- GHCR is anonymously pullable for this package.
 
-- no restart loop;
-- no sustained runaway CPU;
-- no obvious monotonic memory growth over the acceptance window;
-- health remains stable;
-- logs do not show recurring fatal/auth/storage errors.
+Exact upgrade and rollback procedures are recorded in `.ai/tasks/T-006.md`. They require explicit release tags, digest verification and a protected pre-upgrade snapshot of credential-bearing persistent data.
 
-Do not invent arbitrary resource limits without evidence from the NAS.
+**T-006: PASS / PRODUCTION ACCEPTED.**
 
-### Network boundary
+## 10. Post-baseline enhancement boundary
 
-First production baseline is LAN-only. Public domain/reverse-proxy exposure is a later task unless acceptance proves it is required.
+The feature freeze that protected T-002 through T-006 is now lifted. New changes start at T-007+ and remain independently reviewable/rollbackable from the accepted `v1.7.2.1` baseline.
 
-### Gate D
-
-Reviewer uses an explicit evidence matrix and returns PASS / REVISE / DESIGN_CHANGE. A green container alone is not production acceptance.
-
-## 9. T-006 — Production Closeout
-
-### Outcome
-
-Turn the accepted running system into a reproducible production baseline that a later maintainer can identify, upgrade, verify and roll back without relying on chat memory.
-
-### Closeout facts to record
-
-- source commit;
-- release tag;
-- GHCR image tag and immutable digest;
-- NAS image digest actually running;
-- NAS/container/Compose deployment path;
-- persistent-data paths;
-- host/container ports;
-- health result;
-- functional acceptance matrix and date;
-- known limitations / accepted secondary gaps;
-- exact upgrade procedure;
-- exact rollback procedure;
-- whether GHCR is public/private and where credential ownership lives (never credential value);
-- next safe enhancement boundary.
-
-T-006 is PASS only when documentation matches the observed production state.
-
-## 10. Out of scope until T-006 PASS
-
-Unless required to fix a baseline blocker:
+Possible later work includes:
 
 - Sub2API integration;
-- UI redesign or cosmetic feature work;
-- automatic Watchtower-style production updates;
-- Cloudflare/public reverse proxy/domain exposure;
-- new protocols or unrelated upstream feature work;
-- broad refactors or dependency upgrades unrelated to release/deployment correctness.
+- upstream synchronization automation/watch;
+- UI/custom feature work;
+- automatic-update design (not enabled by default);
+- deliberate Cloudflare/public reverse proxy/domain exposure;
+- new protocols or broader refactors.
 
-These belong in T-007+ after the baseline is stable.
-
+None of these are silently folded into the production baseline.
 ## 11. Stop conditions and escalation
 
 Executor stops and reports BLOCKED / DESIGN_CHANGE rather than improvising when:

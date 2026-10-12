@@ -1,6 +1,6 @@
 # workbuddy2api-hub — maintained fork
 
-Status: T-004 GATE C PASS — v1.7.2.1 deployed healthy on NAS; T-005 real-account acceptance pending
+Status: PRODUCTION ACCEPTED — T-006 PASS; v1.7.2.1 is the first verified NAS baseline
 
 ## Purpose
 
@@ -51,12 +51,11 @@ Completed:
 - Shared project-development rules reviewed.
 - `custom/main` created for local integration work.
 
-Not yet done:
+Not yet done / deliberately deferred:
 
-- T-005 real WorkBuddy-account/API acceptance is not complete because no real account has been OAuth-added to this fresh NAS deployment yet.
-- The dashboard still starts with its upstream default panel password `admin`; first interactive login must change it before production acceptance.
-- No public reverse proxy/domain exposure has been added; first baseline remains LAN-only.
-## Current capability
+- No public reverse proxy/domain exposure has been added; the accepted baseline remains LAN-only.
+- No automatic production updater is enabled.
+- T-007+ enhancements are intentionally separate from the accepted v1.7.2.1 baseline.## Current capability
 
 T-001 establishes the fork-owned Docker release/deployment path so a GitHub Release in this fork can publish `ghcr.io/deefery/workbuddy2api-hub`, while the NAS deployment uses an explicitly pinned image tag and preserves runtime state.
 
@@ -79,13 +78,13 @@ At T-002 planning time:
 
 T-002 still requires an Executor-side drift check before release preparation so that a newly-arrived security or data-integrity fix cannot be silently ignored.
 
-## Active task
+## Production baseline
 
-T-003 and T-004 are complete. T-005 Real Functional + Persistence Acceptance is next and is blocked only on interactive real-account setup / credential posture.
+T-001 through T-006 are complete. `v1.7.2.1` is the first accepted maintained-fork production baseline.
 
-### T-003 final release facts
+### Release identity
 
-- Final release source commit: `fbd06b779991bad3c716f193a96deadfcb35cd71`.
+- Release source commit: `fbd06b779991bad3c716f193a96deadfcb35cd71`.
 - Version/tag: `1.7.2.1` / `v1.7.2.1`.
 - Published Release: `https://github.com/deefery/workbuddy2api-hub/releases/tag/v1.7.2.1`.
 - Full tag test matrix: run `38276504575` — PASS.
@@ -93,25 +92,38 @@ T-003 and T-004 are complete. T-005 Real Functional + Persistence Acceptance is 
 - Release checksums workflow: run `38276925510` — PASS.
 - Docker publication workflow: run `38276925393` — PASS.
 - GHCR image: `ghcr.io/deefery/workbuddy2api-hub:v1.7.2.1`.
-- OCI index digest: `sha256:cc6cf1cd0896bd8f55979532d5c1b94aae8369ed596abc672cdbb8197b2bc697`.
-- Manifest includes `linux/amd64` and `linux/arm64`; NAS pulled the image without registry login, proving anonymous pull is available for this package.
-- Earlier `v1.7.2-deefery.1` attempts were never published and the obsolete remote tag was deleted. Attempt 1 exposed a packager parser bug; attempt 2 proved OpenWrt apk-tools rejects the hyphenated fork version. The final dot-numeric fork revision scheme is documented in `.ai/DECISIONS.md`.
+- OCI index / RepoDigest: `sha256:cc6cf1cd0896bd8f55979532d5c1b94aae8369ed596abc672cdbb8197b2bc697`.
+- Manifest includes `linux/amd64` and `linux/arm64`; NAS anonymous pull is verified.
 
-### T-004 NAS deployment facts
+### NAS runtime identity
 
-- NAS: QNAP TS-451D class host, observed `x86_64`, QTS `5.2.10`.
+- NAS: QNAP / QTS `5.2.10`, x86_64.
 - Container Station Docker: `27.1.2-qnap8`; Compose: `v2.29.1-qnap2`.
 - Deployment path: `/share/Container/workbuddy2api-hub`.
-- Host/container port: `8788 -> 8788`; port was free before deployment.
 - Container: `wb-proxy`.
-- Running image: exact tag `ghcr.io/deefery/workbuddy2api-hub:v1.7.2.1`.
-- Persistent mounts: `data/accounts -> /app/accounts`, `data/usage -> /app/usage`, both RW.
-- `/health`: PASS from NAS localhost and a LAN client; container health is `healthy`, restart count `0`.
-- Dashboard root returns HTTP 200; anonymous `/v1/models` correctly returns HTTP 401, confirming API-key enforcement is active.
-- `docker compose down` followed by `up -d` returned healthy and preserved `data/accounts/settings.json` hash.
-- `docker compose up -d --force-recreate` also returned healthy and preserved the same settings hash exactly.
-- Evidence: `.ai/handoffs/T-004.md` and `.ai/reviews/T-003-review-final.md`.
+- Host/container port: `8788 -> 8788`.
+- Running image ID: `sha256:fea841559e6ed5f9f529f1709365a5d7f4678218d18fbb71ce1d4af9ebf6000d`.
+- Running RepoDigest: `sha256:cc6cf1cd0896bd8f55979532d5c1b94aae8369ed596abc672cdbb8197b2bc697`.
+- Persistent mounts: `data/accounts -> /app/accounts`, `data/usage -> /app/usage`, RW.
+- Health: running / healthy / RestartCount 0.
 
-### T-005 remaining acceptance
+### Real functional acceptance
 
-Required interactive items are: change the default panel password, add a real WorkBuddy account through dashboard OAuth, then exercise authenticated `/v1/models`, OpenAI Chat Completions (stream/non-stream), Responses and Anthropic Messages with real upstream traffic. T-006 production closeout remains blocked until that matrix is complete.
+- Panel password is no longer default; its value is not documented.
+- Two real WorkBuddy accounts are present and 2/2 ready.
+- Authenticated `/v1/models`: PASS, 21 models.
+- Chat Completions non-stream: PASS.
+- Chat Completions stream: PASS.
+- Responses API: PASS.
+- Anthropic Messages: PASS.
+- Real traffic exercised `gpt-5.6-sol` and `gpt-6.1-sol`.
+- Four acceptance requests were written to persistent `usage.jsonl`.
+- With real state present, `compose down/up` and `--force-recreate` both returned healthy with settings and usage hashes unchanged and both accounts still ready.
+- Short resource/stability sampling found CPU ~0.01%, memory ~84-86 MiB, stable PIDs, RestartCount 0, and no recent fatal/storage/auth crash signatures.
+
+### Closeout / next work
+
+- Gate D evidence: `.ai/reviews/T-005-review.md`.
+- Reproducible production identity, upgrade procedure and rollback procedure: `.ai/tasks/T-006.md`.
+- Closeout handoff: `.ai/handoffs/T-006.md`.
+- The baseline feature freeze is now lifted. New work starts at T-007+ and must remain separable from this production identity.
