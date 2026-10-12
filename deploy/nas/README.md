@@ -105,3 +105,11 @@ Because `data/accounts` and `data/usage` are host mounts, replacing the image do
 - `.env` is local deployment state and is ignored by Git.
 - Never place WorkBuddy credentials, API keys, passwords, GHCR tokens, or copied `accounts`/`usage` data in this repository.
 - Registry authentication belongs in Docker's credential store on the NAS, not in Compose.
+
+
+## Upstream update and safe rollback (T-007)
+
+Upstream updates are managed through the Windows operator entrypoints:
+- Check-Upstream.cmd: Read-only drift inspection, delta risk evaluation, and T-008 dual network validation.
+- Update-From-Upstream.cmd --dry-run: Simulation mode producing a full 16-step deployment plan without touching remote git or NAS.
+- Update-From-Upstream.cmd: Full update pipeline. Before modifying WB_IMAGE_TAG, it creates a timestamped snapshot of .env, docker-compose.yml, data/accounts, and data/usage. In case of health or network failure, it safely rolls back to the exact previous image tag. If unverified persistent data migrations are detected, the pipeline halts to protect state.

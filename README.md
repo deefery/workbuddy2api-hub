@@ -131,7 +131,7 @@ python tests/run_all.py            # 全部套件
 python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
-- 141 个套件：105 个 Python + 36 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- 142 个套件：106 个 Python + 36 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
 - CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12；推送 `v*` tag 时额外断言 **tag == 源码版本**（`-ci` 演练 tag 豁免）。
 
@@ -385,7 +385,27 @@ PR 贡献者（v1.4.5 之前的改动未进上方更新记录，这里一并列�
 
 ---
 
-## 八、免责声明 (Disclaimer)
+
+---
+
+## 八、上游同步与安全更新 (Upstream Sync & Safe Deployment)
+
+为降低日常跟随 upstream 更新的维护成本并保障生产安全，仓库提供两个标准 Windows 运维入口：
+
+- **Check-Upstream.cmd**（只读检查）
+  - 安全检查 upstream 与 fork 之间的 commit delta 与版本基线；
+  - 自动检测工作流、数据存储与容器配置变更（如涉及 wb_settings.py 或 Compose 会标记 HIGH RISK）；
+  - 验证 T-008 双网络拓扑完整性（default + sub2api_sub2api-network）；
+  - 生成免密结构化审计证据，绝不创建 tag、不发布 Release、不触及生产 NAS。
+
+- **Update-From-Upstream.cmd**（Operator 显式启动的完整更新入口）
+  - 支持 --dry-run 计划模式，输出完整 16 步更新计划（旧/新 SHA、推导版本、目标标签及回滚策略），不产生外部修改；
+  - 遵循 D-004 / D-010 四段式版本推导规则（X.Y.Z.N），严格拒绝破坏 OpenWrt APK 的连字符版本；
+  - 保持 D-008 draft-first 发布流程与 GHCR multi-arch 校验；
+  - 升级前自动创建生产快照（.env, docker-compose.yml, data/accounts, data/usage），部署失败时自动安全回滚至上一精确 Tag。
+
+## 九、免责声明 (Disclaimer)
 
 1. 本项目为非官方自托管网关，仅供技术研究、逆向协议学习与个人合法授权账号在私有环境测试使用。
 2. 本项目不提供任何账号及额度。请严格遵守官方服务条款，禁止用于任何商业转售、恶意并发或违规滥用。
+
