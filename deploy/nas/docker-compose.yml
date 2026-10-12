@@ -1,0 +1,15 @@
+services:
+  wb-proxy:
+    image: "ghcr.io/deefery/workbuddy2api-hub:${WB_IMAGE_TAG:?set WB_IMAGE_TAG in .env to a published release tag}"
+    container_name: wb-proxy
+    restart: unless-stopped
+    user: "${PUID:-0}:${PGID:-0}"
+    ports:
+      - "${WB_HOST_PORT:-8788}:8788"
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8788"
+      TZ: "${TZ:-Asia/Shanghai}"
+    volumes:
+      - ./data/accounts:/app/accounts
+      - ./data/usage:/app/usage

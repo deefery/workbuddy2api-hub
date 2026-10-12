@@ -1,6 +1,6 @@
 # workbuddy2api-hub — maintained fork
 
-Status: BOOTSTRAP
+Status: T-001 DONE — release not yet published
 
 ## Purpose
 
@@ -55,10 +55,10 @@ Not yet done:
 
 - No NAS deployment has been performed.
 - No custom Docker image has been released from this fork yet.
-- No project-specific implementation task has started.
+- T-001 implementation passed review in isolated branch/worktree `task/T-001` / `C:\_AI\projects\.webcodex-worktrees\workbuddy2api-hub-f7c5240a`, based on `17c544009898ad3d387b40dce6343c66334f2987`. The release/deployment path is defined; NAS deployment and external publishing remain separate operations.
 
-## Next likely capability
+## Current capability
 
-Prepare a fork-owned Docker release/deployment path so tagged releases can publish `ghcr.io/deefery/workbuddy2api-hub` and the NAS can consume that image while preserving runtime state.
+T-001 establishes the fork-owned Docker release/deployment path so a GitHub Release in this fork can publish `ghcr.io/deefery/workbuddy2api-hub`, while the NAS deployment uses an explicitly pinned image tag and preserves runtime state.
 
-That work should be defined as an explicit task with outcome, boundaries, acceptance evidence, exact base, branch/worktree, and deployment authorization separated from build/release authorization.
+The implementation task and evidence live in `.ai/tasks/T-001.md` and `.ai/handoffs/T-001.md`. Release publication and NAS deployment remain separately authorized operations.
