@@ -82,27 +82,32 @@ T-002 still requires an Executor-side drift check before release preparation so 
 
 ## Active task
 
-T-002 is DONE and integrated. T-003 First Fork Release + GHCR is READY for a separate Executor but external release operations are not yet authorized.
+T-003 First Fork Release + GHCR is `REVISE — R1` after the first real tag-triggered release attempt exposed an OpenWrt packaging compatibility defect.
 
 T-002 integration facts:
 
 - Review 2 approved candidate: `f26d7bab9eb9ec9768ba0325a71506ee1859cdba`.
 - Integrated release-source commit on `custom/main`: `0c719417dc333f1f75b9a62eec47740c98520d4e`.
 - The integrated T-002 product/test paths were verified identical to the approved candidate after cherry-pick integration.
-- No push, tag, GitHub Release, GHCR publication, or NAS operation has occurred.
 
-T-003 release identity:
+T-003 attempt 1 facts:
 
-- Version: `1.7.2-deefery.1`.
-- Tag: `v1.7.2-deefery.1`.
-- Required registry target: `ghcr.io/deefery/workbuddy2api-hub:v1.7.2-deefery.1`.
-- Release source commit: `0c719417dc333f1f75b9a62eec47740c98520d4e`.
+- Project Owner explicitly authorized full T-003 publication through GHCR, excluding NAS operations.
+- `custom/main` was pushed to `origin`.
+- The fork's GitHub Actions were initially dormant because this is a fork; Actions were explicitly activated through the repository permissions API.
+- The fork default branch was changed to `custom/main`, while `main` remains the upstream-sync branch.
+- Exact tag `v1.7.2-deefery.1` was pushed at `0c719417dc333f1f75b9a62eec47740c98520d4e` after workflow activation.
+- `tests.yml` run `38270657497` passed the complete matrix and tag/source assertion.
+- `release.yml` run `38270657526` passed the version gate and required full-matrix gate, then failed in `openwrt packages` before any Draft Release could be written.
+- Failure: `wrt/openwrt/build-ipk.sh` line 162 extracts `server_version` with `[0-9.]*`, so fork version `1.7.2-deefery.1` is reported as unparseable.
+- No GitHub Release was published, no GHCR image was produced, and no NAS operation occurred.
+
+T-003 R1 is intentionally narrow: make the OpenWrt release packager accept the already-approved fork version identity without weakening source/package equality checks, add regression coverage, then return for Reviewer approval before retag/release retry.
+
 - Task contract: `.ai/tasks/T-003.md`.
-- Executor start prompt: `.ai/tasks/T-003-executor-start.md`.
-- Branch: `task/T-003`.
-- Executor worktree: `C:\_AI\projects\.webcodex-worktrees\workbuddy2api-hub-13f2d723`.
+- Attempt 1 evidence: `.ai/reviews/T-003-attempt1.md`.
+- Executor R1 prompt: `.ai/tasks/T-003-executor-rework-R1.md`.
+- Branch/worktree remain `task/T-003` / `C:\_AI\projects\.webcodex-worktrees\workbuddy2api-hub-13f2d723`.
 - WebCodex worktree project: `agent:dee-gb-r-7bcf9574c2454a66:workbuddy2api-hub-13f2d723-f89e5546`.
 
-The native repository release path is draft-first: pushing the exact `v*` tag starts the full test/release workflow and creates a Draft Release with packaged assets; publishing that existing Draft Release then triggers `.github/workflows/docker-publish.yml`, which publishes the fork-owned multi-architecture GHCR image. T-003 must use this path rather than manually bypassing it.
-
-T-003 remains blocked on explicit Project Owner authorization for push/tag/Release publication. NAS operations remain outside T-003.
+T-004 remains blocked until T-003 Gate B PASS.

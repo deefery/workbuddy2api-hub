@@ -185,6 +185,12 @@ External effects are not implied by READY status.
 - Executor handoff records workflow run identities/URLs, release identity, asset list, image digest/platform evidence, gaps and deviations.
 
 The moving `latest` tag may also be produced by the existing non-prerelease Docker workflow, but it is not accepted as the production identity and will not be used as the T-004 deployment pin.
+
+### Attempt 1 / R1 status
+
+The first real tag-triggered attempt reached the repository release gate successfully far enough to prove the full test matrix and tag/source assertion, but `release.yml` failed in `openwrt packages` before Draft Release creation. `wrt/openwrt/build-ipk.sh` parses `server_version` with a digits/dots-only expression, so the approved fork version `1.7.2-deefery.1` is rejected as unparseable.
+
+T-003 is therefore `REVISE — R1`. R1 must be a minimal release-engineering compatibility fix: preserve exact equality between detected source version and OpenWrt `PKG_VERSION`, allow the approved fork suffix in the detected source version, add focused regression coverage, rerun relevant local/full tests, and return for Reviewer approval. No further tag mutation, Draft Release publication, GHCR publication, or NAS operation occurs until R1 PASS.
 ## 7. T-004 — NAS Preflight + First Deployment
 
 ### Phase A: read-only preflight

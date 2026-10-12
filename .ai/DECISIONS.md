@@ -121,3 +121,18 @@ Why:
 
 - This keeps the fork on the repository's strongest existing release path: source/tag identity, full cross-platform tests, packaged-asset verification, deliberate human publication, then container publication.
 - Publishing a Release before the tag workflow would bypass the intended Draft Release safety boundary and could trigger a container build before the packaged release is accepted.
+
+## D-009 — Use `custom/main` as the fork's GitHub default branch
+
+Status: ACCEPTED
+
+Decision:
+
+- Keep local/remote `main` as the upstream-sync branch.
+- Use `custom/main` as the fork repository's GitHub default branch because it is the maintained integration/release line and contains the exact workflows used by our releases.
+- This changes repository presentation/workflow registration, not the policy that `main` remains upstream-friendly.
+
+Why:
+
+- GitHub disables workflows on newly-created forks until explicitly activated, and workflow registration is evaluated from the fork's default branch.
+- Our maintained release line is `custom/main`; making it the default makes Actions/release UI behavior match the branch users are actually meant to consume, while preserving `main` for clean upstream synchronization.
