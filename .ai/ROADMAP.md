@@ -76,7 +76,7 @@ T-002  First Release Readiness           PASS — Gate A / Review 2
   |
 Gate A  Reviewer: RELEASE CANDIDATE PASS ✓
   |
-T-003  First Fork Release + GHCR
+T-003  First Fork Release + GHCR          READY — authorization pending
   |
 Gate B  Reviewer: RELEASE PASS
   |
@@ -133,35 +133,58 @@ Reviewer PASS requires:
 
 ### Outcome
 
-Publish the reviewed release candidate as the first fork release and obtain a verifiable multi-architecture GHCR image.
+Publish the reviewed/integrated current code line as the first maintained-fork release and obtain a verifiable multi-architecture GHCR image without touching the NAS.
 
-### Authorization gate
+Release source commit: `0c719417dc333f1f75b9a62eec47740c98520d4e`
+Version: `1.7.2-deefery.1`
+Tag: `v1.7.2-deefery.1`
 
-Requires Project Owner authorization before push/tag/Release publication.
+### Native release sequence
 
-### Required chain of identity
+The repository already implements a two-stage release pipeline. T-003 must preserve it:
 
 ```text
-reviewed source commit
-  -> exact release tag
-  -> GitHub Release
-  -> ghcr.io/deefery/workbuddy2api-hub:<tag>
-  -> manifest/digest
+Project Owner authorizes release operations
+  -> push custom/main so the reviewed source commit is reachable on origin
+  -> create/push exact tag v1.7.2-deefery.1 at the release source commit
+  -> tests.yml runs full matrix + tag/source assertion
+  -> release.yml waits for the full matrix, builds ZIP/IPK/APK/checksums
+  -> release.yml creates/updates a Draft Release only
+  -> verify Draft Release, assets, tag/commit identity and successful workflows
+  -> Project Owner publish authorization (or prior explicit authorization covering this stage)
+  -> publish the existing Draft Release
+  -> release published event triggers docker-publish.yml
+  -> GHCR exact tag + multi-arch OCI index/digest verified
+  -> Gate B review
 ```
 
-### Acceptance
+Do not manually create a published Release ahead of the tag-triggered release workflow. Do not bypass the Draft Release gate.
 
-- release tag points to the reviewed commit;
-- tag/source version assertion passes;
-- full release CI passes;
-- Docker publish workflow passes;
-- GHCR contains the exact tag;
-- manifest includes at least `linux/amd64` and `linux/arm64`;
-- immutable image digest is recorded;
-- package visibility is known; if private, pull-only NAS credential requirements are documented without putting secrets in Git.
+### Authorization gates
 
-No NAS write occurs in T-003.
+External effects are not implied by READY status.
 
+- Stage A requires Project Owner authorization before pushing `custom/main`, creating/pushing the release tag, or otherwise mutating the GitHub fork.
+- Stage B requires Project Owner authorization to publish the generated Draft Release unless the Owner's explicit T-003 authorization clearly covers both stages.
+- Publishing the Release is understood to trigger GHCR publication through the existing repository workflow.
+- No NAS write, pull, start, restart, network exposure, or credential configuration is part of T-003.
+
+### Acceptance / Gate B inputs
+
+- exact tag `v1.7.2-deefery.1` resolves to release source commit `0c719417dc333f1f75b9a62eec47740c98520d4e`;
+- tag/source/OpenWrt version assertions pass without weakening the guard;
+- the tag-triggered full test matrix passes on all expected legs;
+- tag-triggered `release.yml` passes and the generated release assets are present;
+- the existing Draft Release is deliberately published rather than replaced/bypassed;
+- `docker-publish.yml` triggered by the published Release passes;
+- GHCR contains `ghcr.io/deefery/workbuddy2api-hub:v1.7.2-deefery.1`;
+- the OCI image index includes at least `linux/amd64` and `linux/arm64`;
+- the immutable image/index digest is recorded;
+- GHCR package visibility is recorded, and if private the downstream pull-auth requirement is documented without storing credentials in Git;
+- no NAS operation occurred;
+- Executor handoff records workflow run identities/URLs, release identity, asset list, image digest/platform evidence, gaps and deviations.
+
+The moving `latest` tag may also be produced by the existing non-prerelease Docker workflow, but it is not accepted as the production identity and will not be used as the T-004 deployment pin.
 ## 7. T-004 — NAS Preflight + First Deployment
 
 ### Phase A: read-only preflight

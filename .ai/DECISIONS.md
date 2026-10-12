@@ -104,3 +104,20 @@ Why:
 
 - A narrow first production baseline gives later changes a known-good release, image digest, deployment state, persistence contract, and rollback point.
 - Feature growth before that baseline would make failures harder to localize and upstream synchronization/PR preparation more expensive.
+
+## D-008 — Preserve the repository's draft-first release pipeline
+
+Status: ACCEPTED
+
+Decision:
+
+- A real fork release starts by pushing the exact reviewed `v*` tag; this triggers `tests.yml` and `release.yml`.
+- `release.yml` is the only release writer during packaging and must create/update a **Draft Release** after the required full test matrix and asset checks pass.
+- The Draft Release is reviewed before publication. Publishing that existing draft is the action that triggers `.github/workflows/docker-publish.yml` through the `release: published` event.
+- Do not manually create a published Release ahead of the tag workflow and do not duplicate/bypass the repository's release gate.
+- GHCR exact tag/digest is the release evidence used by the later NAS task; `latest` is not the production deployment identity.
+
+Why:
+
+- This keeps the fork on the repository's strongest existing release path: source/tag identity, full cross-platform tests, packaged-asset verification, deliberate human publication, then container publication.
+- Publishing a Release before the tag workflow would bypass the intended Draft Release safety boundary and could trigger a container build before the packaged release is accepted.

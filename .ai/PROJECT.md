@@ -1,6 +1,6 @@
 # workbuddy2api-hub — maintained fork
 
-Status: T-002 GATE A PASS — reviewed candidate approved; integration pending
+Status: T-003 READY — awaiting Project Owner release authorization
 
 ## Purpose
 
@@ -82,20 +82,24 @@ T-002 still requires an Executor-side drift check before release preparation so 
 
 ## Active task
 
-T-002 First Release Readiness is PASS at Reviewer Gate A / Review 2. The reviewed candidate is approved; local integration into `custom/main` is the next Architect step before T-003 is prepared.
+T-002 is DONE and integrated. T-003 First Fork Release + GHCR is READY for a separate Executor but external release operations are not yet authorized.
 
-- Approved code base: `271f41c2ac710df74ed5231df02baaec4e05d9b3`
-- Branch: `task/T-002`
-- Executor worktree: `C:\_AI\projects\.webcodex-worktrees\workbuddy2api-hub-d0206b24`
-- Task contract: `.ai/tasks/T-002.md`
-- Executor start prompt: `.ai/tasks/T-002-executor-start.md`
-- Review 1: `.ai/reviews/T-002-review1.md`
-- Executor R1 rework prompt: `.ai/tasks/T-002-executor-rework-R1.md`
-- Review 2: `.ai/reviews/T-002-review2.md`
-- Approved release-candidate commit: `f26d7bab9eb9ec9768ba0325a71506ee1859cdba`
-- R1 handoff commit: `5b73e25c5af4dd0dc1181c6c8fa85de778cd359a`
-- Executor candidate observed: `d269edcf031db46c3af8f3a8aeb5a98b41d0d8ee`; handoff commit: `bbd7479c243a64374aeb0d83490131b980d50440`
+T-002 integration facts:
 
-Review 1 found two blockers: fork-suffixed current versions broke upstream update comparison, and release-facing identity text was inconsistent. R1 fixed both narrowly. Review 2 independently verified the exact R1 diff, direct version-comparison boundaries, focused update tests (48/48), the full repository suite (141/141), release checks (68/68), checkout cleanliness, `git diff --check`, zero upstream drift, and a clean task worktree. Gate A is PASS. No push, release, registry publication, or NAS operation has occurred.
+- Review 2 approved candidate: `f26d7bab9eb9ec9768ba0325a71506ee1859cdba`.
+- Integrated release-source commit on `custom/main`: `0c719417dc333f1f75b9a62eec47740c98520d4e`.
+- The integrated T-002 product/test paths were verified identical to the approved candidate after cherry-pick integration.
+- No push, tag, GitHub Release, GHCR publication, or NAS operation has occurred.
 
-No push, release publication, registry publication, or NAS operation is authorized by T-002.
+T-003 release identity:
+
+- Version: `1.7.2-deefery.1`.
+- Tag: `v1.7.2-deefery.1`.
+- Required registry target: `ghcr.io/deefery/workbuddy2api-hub:v1.7.2-deefery.1`.
+- Release source commit: `0c719417dc333f1f75b9a62eec47740c98520d4e`.
+- Task contract: `.ai/tasks/T-003.md`.
+- Executor start prompt: `.ai/tasks/T-003-executor-start.md`.
+
+The native repository release path is draft-first: pushing the exact `v*` tag starts the full test/release workflow and creates a Draft Release with packaged assets; publishing that existing Draft Release then triggers `.github/workflows/docker-publish.yml`, which publishes the fork-owned multi-architecture GHCR image. T-003 must use this path rather than manually bypassing it.
+
+T-003 remains blocked on explicit Project Owner authorization for push/tag/Release publication. NAS operations remain outside T-003.
