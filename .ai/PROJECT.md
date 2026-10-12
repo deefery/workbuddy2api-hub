@@ -1,6 +1,6 @@
 # workbuddy2api-hub — maintained fork
 
-Status: ROADMAP APPROVED — T-002 PREPARING
+Status: T-002 READY — awaiting Executor
 
 ## Purpose
 
@@ -79,3 +79,15 @@ At T-002 planning time:
 - divergence: local custom branch is 2 commits ahead; upstream has 0 commits beyond the merge base.
 
 T-002 still requires an Executor-side drift check before release preparation so that a newly-arrived security or data-integrity fix cannot be silently ignored.
+
+## Active task
+
+T-002 First Release Readiness is READY.
+
+- Approved code base: `271f41c2ac710df74ed5231df02baaec4e05d9b3`
+- Branch: `task/T-002`
+- Executor worktree: `C:\_AI\projects\.webcodex-worktrees\workbuddy2api-hub-d0206b24`
+- Task contract: `.ai/tasks/T-002.md`
+- Executor start prompt: `.ai/tasks/T-002-executor-start.md`
+
+No push, release publication, registry publication, or NAS operation is authorized by T-002.

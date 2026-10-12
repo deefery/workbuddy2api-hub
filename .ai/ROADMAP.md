@@ -32,7 +32,7 @@ As observed during roadmap preparation:
 - fork-owned GHCR/NAS deployment path: defined but not externally published or deployed
 - NAS production deployment: not started
 
-The exact T-002 implementation base is recorded in `.ai/tasks/T-002.md` after Architect preparation is committed.
+T-002 is prepared on exact approved code base `271f41c2ac710df74ed5231df02baaec4e05d9b3`; branch/worktree and acceptance are recorded in `.ai/tasks/T-002.md`.
 
 ## 3. Role and authorization model
 
@@ -72,7 +72,7 @@ Retains authorization for operations with external/production impact, including:
 ```text
 T-001  Fork release/deploy path          DONE
   |
-T-002  First Release Readiness           NEXT / READY after Architect prep
+T-002  First Release Readiness           READY — awaiting Executor
   |
 Gate A  Reviewer: RELEASE CANDIDATE PASS
   |
