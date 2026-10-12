@@ -28,6 +28,38 @@ class VersionStringTests(unittest.TestCase):
         self.assertIsNotNone(server, "server header version string not found")
         self.assertEqual(overview.group(1), server.group(1))
 
+    def test_openwrt_packager_scripts_extract_server_version(self):
+        """wrt/openwrt/build-ipk.sh 与 build-apk.sh 的 sed 解析器必须支持 fork 扩展版本号（如 1.7.2-deefery.1）。"""
+        src = read("wb_proxy.py")
+        server = re.search(r'server_version\s*=\s*"wb-proxy/([^"]+)"', src)
+        self.assertIsNotNone(server, "wb_proxy.py 中未找到 server_version")
+        expected_ver = server.group(1)
+
+        scripts = ["wrt/openwrt/build-ipk.sh", "wrt/openwrt/build-apk.sh"]
+        for rel in scripts:
+            text = read(*rel.split("/"))
+            m = re.search(r'wb-proxy\\/\\\((.*?)\\\)', text)
+            self.assertIsNotNone(m, f"{rel} 未包含预期的 server_version sed 解析模式")
+            pattern = m.group(1)
+
+            # 验证对当前源码版本的提取正确性
+            match = re.search(r'server_version\s*=\s*"wb-proxy/(' + pattern + r')"', src)
+            self.assertIsNotNone(match, f"{rel} 的模式 {pattern} 无法匹配当前版本 {expected_ver}")
+            self.assertEqual(match.group(1), expected_ver, f"{rel} 解析出的版本不一致")
+
+            # 验证对各种合法版本（包含 fork 扩展、构建号）的兼容性
+            for valid_ver in ["1.7.2", "1.7.2-deefery.1", "1.8.0-rc1", "2.0.0+build.42", "1.7.2_patch"]:
+                sample_line = f'    server_version = "wb-proxy/{valid_ver}"'
+                valid_match = re.search(r'server_version\s*=\s*"wb-proxy/(' + pattern + r')"', sample_line)
+                self.assertIsNotNone(valid_match, f"{rel} 无法解析合法版本 {valid_ver}")
+                self.assertEqual(valid_match.group(1), valid_ver)
+
+            # 验证非法格式（非数字开头、含空格、畸形等）不会被错误捕获
+            for malformed in ["", "not_starting_with_digit", "version with spaces", "1.7.2 bad"]:
+                sample_line = f'    server_version = "wb-proxy/{malformed}"'
+                malformed_match = re.search(r'server_version\s*=\s*"wb-proxy/(' + pattern + r')"', sample_line)
+                self.assertIsNone(malformed_match, f"{rel} 错误地匹配了畸形版本 {malformed}")
+
 
 class WorkflowTests(unittest.TestCase):
     def test_tests_workflow_asserts_tag_against_source(self):
