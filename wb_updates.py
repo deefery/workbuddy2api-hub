@@ -67,16 +67,15 @@ def parse_version(text):
 def parse_current_version(text):
     """解析当前运行版本的基础 (major, minor, patch)；其它一律 None。
 
-    本地运行版本（current_version）允许携带发布后缀（例如 fork 标识
-    -deefery.1、构建元数据等），更新发现按其基础主次修补版本号进行比较。
-    远端 release 依然严格仅接受 parse_version（纯稳定版本号）。
+    本地运行版本（current_version）允许在三段上游版本后携带数字 fork revision
+    （例如 1.7.2.1），也兼容历史发布后缀/构建元数据。更新发现只按基础
+    major.minor.patch 比较。远端 release 依然严格仅接受 parse_version（纯 X.Y.Z）。
     """
     raw = str(text or "").strip()
-    match = re.match(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$", raw)
+    match = re.match(r"^v?(\d+)\.(\d+)\.(\d+)(?:\.\d+)*(?:[-+].*)?$", raw)
     if not match:
         return None
     return tuple(int(part) for part in match.groups())
-
 
 def is_newer(candidate, current):
     """candidate 是否严格新于 current；任一边不可解析就是 False。"""

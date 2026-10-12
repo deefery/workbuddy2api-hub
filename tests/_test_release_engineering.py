@@ -29,7 +29,7 @@ class VersionStringTests(unittest.TestCase):
         self.assertEqual(overview.group(1), server.group(1))
 
     def test_openwrt_packager_scripts_extract_server_version(self):
-        """wrt/openwrt/build-ipk.sh 与 build-apk.sh 的 sed 解析器必须支持 fork 扩展版本号（如 1.7.2-deefery.1）。"""
+        """wrt/openwrt/build-ipk.sh 与 build-apk.sh 的 sed 解析器必须支持 fork 扩展版本号。"""
         src = read("wb_proxy.py")
         server = re.search(r'server_version\s*=\s*"wb-proxy/([^"]+)"', src)
         self.assertIsNotNone(server, "wb_proxy.py 中未找到 server_version")
@@ -48,7 +48,7 @@ class VersionStringTests(unittest.TestCase):
             self.assertEqual(match.group(1), expected_ver, f"{rel} 解析出的版本不一致")
 
             # 验证对各种合法版本（包含 fork 扩展、构建号）的兼容性
-            for valid_ver in ["1.7.2", "1.7.2-deefery.1", "1.8.0-rc1", "2.0.0+build.42", "1.7.2_patch"]:
+            for valid_ver in ["1.7.2", "1.7.2.1", "1.7.2-deefery.1", "1.8.0-rc1", "2.0.0+build.42", "1.7.2_patch"]:
                 sample_line = f'    server_version = "wb-proxy/{valid_ver}"'
                 valid_match = re.search(r'server_version\s*=\s*"wb-proxy/(' + pattern + r')"', sample_line)
                 self.assertIsNotNone(valid_match, f"{rel} 无法解析合法版本 {valid_ver}")
