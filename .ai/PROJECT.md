@@ -55,7 +55,9 @@ Not yet done / deliberately deferred:
 
 - No public reverse proxy/domain exposure has been added; the accepted baseline remains LAN-only.
 - No automatic production updater is enabled.
-- T-007+ enhancements are intentionally separate from the accepted v1.7.2.1 baseline.## Current capability
+- T-007+ enhancements are intentionally separate from the accepted v1.7.2.1 baseline.
+
+## Current capability
 
 T-001 establishes the fork-owned Docker release/deployment path so a GitHub Release in this fork can publish `ghcr.io/deefery/workbuddy2api-hub`, while the NAS deployment uses an explicitly pinned image tag and preserves runtime state.
 
@@ -127,3 +129,21 @@ T-001 through T-006 are complete. `v1.7.2.1` is the first accepted maintained-fo
 - Reproducible production identity, upgrade procedure and rollback procedure: `.ai/tasks/T-006.md`.
 - Closeout handoff: `.ai/handoffs/T-006.md`.
 - The baseline feature freeze is now lifted. New work starts at T-007+ and must remain separable from this production identity.
+
+## Post-baseline tasks
+
+### T-007 — Upstream Sync & Safe Auto-Deploy
+
+Status: READY. Design contract is in `.ai/tasks/T-007.md`.
+
+The intended maintenance model is operator-triggered automation: check upstream drift, integrate safely, preserve release gates, publish the exact fork image, snapshot production, upgrade the NAS, verify real state, and rollback on failure. Unattended production mutation is deliberately deferred until repeated real upgrades prove the pipeline.
+
+### T-008 — Shared Docker network — PASS
+
+`wb-proxy` now retains `workbuddy2api-hub_default` and additionally joins `sub2api_sub2api-network`.
+
+- Internal Docker endpoint: `http://wb-proxy:8788/v1`.
+- Existing LAN endpoint remains `http://192.168.31.13:8788/v1`.
+- `openmaic-app` and `sub2api` both resolve `wb-proxy` through Docker DNS and successfully reach `/health`.
+- After recreate, both WorkBuddy accounts remain ready and settings/usage hashes are unchanged.
+- Evidence: `.ai/tasks/T-008.md` and `.ai/handoffs/T-008.md`.

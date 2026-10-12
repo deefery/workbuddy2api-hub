@@ -152,3 +152,21 @@ Why:
 - Real OpenWrt 25.x SDK packaging proved `apk mkpkg` rejects `1.7.2-deefery.1-r1` as an invalid package version even after the packager parser was fixed.
 - OpenWrt's APK migration guidance expects package versions shaped like `<major>.<minor>.<fixup>[.<sub1>...]`; `1.7.2.1` satisfies that constraint and still preserves a visible fork revision.
 - This keeps one exact version identity across `wb_proxy.py`, OpenWrt `PKG_VERSION`, Git tag, release assets and container image.
+
+## D-011 — Share a Docker service-discovery network without merging service lifecycles
+
+Status: ACCEPTED
+
+Decision:
+
+- Keep WorkBuddy2API on its own Compose-owned default network.
+- Also attach `wb-proxy` to the existing external `sub2api_sub2api-network` used by OpenMAIC and Sub2API.
+- Internal consumers use Docker DNS `wb-proxy:8788`, never fixed container IPs.
+- Keep the existing host port `8788` for LAN/debug access unless a later task deliberately changes exposure.
+- Do not fold WorkBuddy2API into the Sub2API Compose project merely to gain connectivity.
+
+Why:
+
+- OpenMAIC already uses the shared Sub2API network, so dual-homing `wb-proxy` gives both services a stable internal endpoint with no host-IP hairpin.
+- Keeping a service-owned network preserves independent Compose lifecycle, rollback and fault isolation.
+- Docker DNS survives container recreation while fixed `172.29.x.x` addresses do not.

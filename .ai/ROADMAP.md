@@ -231,16 +231,27 @@ Exact upgrade and rollback procedures are recorded in `.ai/tasks/T-006.md`. They
 
 The feature freeze that protected T-002 through T-006 is now lifted. New changes start at T-007+ and remain independently reviewable/rollbackable from the accepted `v1.7.2.1` baseline.
 
-Possible later work includes:
+### T-007 — Upstream Sync & Safe Auto-Deploy — READY
 
-- Sub2API integration;
-- upstream synchronization automation/watch;
+Create operator-triggered maintenance tooling that can detect upstream drift, safely integrate it, preserve the existing test/draft-release/GHCR gates, snapshot NAS state, deploy the exact new tag, verify real state and rollback when safe. Initial automation is not allowed to perform unattended scheduled production mutation.
+
+Contract: `.ai/tasks/T-007.md`.
+
+### T-008 — Shared Docker Network for OpenMAIC / Sub2API Access — PASS
+
+`wb-proxy` keeps its own default Compose network and additionally joins the existing external `sub2api_sub2api-network`. OpenMAIC and Sub2API can now use Docker DNS `http://wb-proxy:8788/v1`; the LAN endpoint remains unchanged. The topology-only recreate preserved account/settings/usage state and 2/2 account readiness.
+
+Evidence: `.ai/tasks/T-008.md`, `.ai/handoffs/T-008.md`.
+
+### Later candidates
+
+- logical provider registration in Sub2API / OpenMAIC;
 - UI/custom feature work;
-- automatic-update design (not enabled by default);
 - deliberate Cloudflare/public reverse proxy/domain exposure;
 - new protocols or broader refactors.
 
 None of these are silently folded into the production baseline.
+
 ## 11. Stop conditions and escalation
 
 Executor stops and reports BLOCKED / DESIGN_CHANGE rather than improvising when:

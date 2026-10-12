@@ -13,3 +13,11 @@ services:
     volumes:
       - ./data/accounts:/app/accounts
       - ./data/usage:/app/usage
+    networks:
+      - default
+      - sub2api
+
+networks:
+  sub2api:
+    external: true
+    name: sub2api_sub2api-network
