@@ -40,3 +40,10 @@ This repository is a long-term maintained fork of `ardeyouxipianyi/workbuddy2api
 
 - Durable project state and architectural decisions belong in `.ai/PROJECT.md` and `.ai/DECISIONS.md`.
 - For implementation tasks, use `.ai/tasks/` and `.ai/handoffs/` when the task is substantial enough to benefit from explicit acceptance and review evidence.
+
+## Project roles
+
+- The primary ChatGPT project thread acts as **Architect + Reviewer**: it owns roadmap, task contracts, architecture/risk decisions, acceptance gates, and final PASS / REVISE / DESIGN_CHANGE review.
+- Implementation is performed by a **separate Executor** supplied by the user. The Architect/Reviewer does not implement an approved task itself unless the user explicitly changes the role assignment.
+- The user remains **Project Owner** and supplies explicit authorization for external-impact operations such as push, tag/release publication, registry publication when not implied by an authorized release, NAS writes/deployment/restart, or public exposure.
+- Architect preparation may create/update project documentation, exact task branches/worktrees, and other non-product coordination state needed to make a task READY.

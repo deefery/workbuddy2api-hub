@@ -73,3 +73,34 @@ Why:
 
 - In this fork, `github.repository` resolves to `deefery/workbuddy2api-hub`, so the existing workflow already publishes to the correct fork-owned GHCR namespace.
 - Avoiding a duplicate workflow reduces divergence from upstream and keeps generally useful upstream changes easier to synchronize.
+
+## D-006 — Separate Architect/Reviewer from Executor
+
+Status: ACCEPTED
+
+Decision:
+
+- The primary project thread acts as Architect + Reviewer.
+- A separate Executor, supplied by the user, performs implementation tasks from an Architect-approved task contract and exact worktree/base.
+- The Architect/Reviewer does not implement task scope after dispatch unless the user explicitly changes the role assignment.
+- The user remains the Project Owner and authorization authority for push/release/NAS/public-exposure operations.
+
+Why:
+
+- This preserves independent review pressure and prevents the same agent from quietly redefining acceptance while implementing.
+- It keeps the user's involvement focused on real product/operational authorization rather than routine message passing between agents.
+
+## D-007 — Freeze feature growth until the first NAS production baseline is accepted
+
+Status: ACCEPTED
+
+Decision:
+
+- From T-002 through T-006, prioritize making the current code line releaseable, deployable, testable, persistent, recoverable, and documented on the NAS.
+- Do not mix Sub2API integration, UI redesign, automatic update systems, public reverse proxy/domain exposure, new protocol work, or unrelated feature expansion into this baseline unless a blocker proves one is required for acceptance.
+- Public exposure, Sub2API integration, and other enhancements begin only after T-006 closes the first production baseline, unless the Architect records a required DESIGN_CHANGE.
+
+Why:
+
+- A narrow first production baseline gives later changes a known-good release, image digest, deployment state, persistence contract, and rollback point.
+- Feature growth before that baseline would make failures harder to localize and upstream synchronization/PR preparation more expensive.

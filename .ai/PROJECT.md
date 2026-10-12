@@ -1,6 +1,6 @@
 # workbuddy2api-hub — maintained fork
 
-Status: T-001 DONE — release not yet published
+Status: ROADMAP APPROVED — T-002 PREPARING
 
 ## Purpose
 
@@ -62,3 +62,20 @@ Not yet done:
 T-001 establishes the fork-owned Docker release/deployment path so a GitHub Release in this fork can publish `ghcr.io/deefery/workbuddy2api-hub`, while the NAS deployment uses an explicitly pinned image tag and preserves runtime state.
 
 The implementation task and evidence live in `.ai/tasks/T-001.md` and `.ai/handoffs/T-001.md`. Release publication and NAS deployment remain separately authorized operations.
+
+## Delivery roadmap
+
+The production-baseline roadmap is `.ai/ROADMAP.md`. It deliberately stops feature expansion until the current code line has been release-readied, published from the fork, deployed to the QNAP NAS, functionally verified with real WorkBuddy/API flows, persistence-tested, and closed out with reproducible production facts.
+
+Architect/Reviewer and Executor are separate roles for this roadmap. The current Architect/Reviewer thread prepares READY tasks and reviews Executor handoffs; the user supplies the Executor and retains authorization over external-impact operations.
+
+## Upstream dispatch snapshot
+
+At T-002 planning time:
+
+- `custom/main`: `7ea962f55fb80c16be56c3c77b3ef07ce9e0fd19`
+- `upstream/main`: `906ca6a097e3e002415db53ea84c9b89c1589bed`
+- merge base: `906ca6a097e3e002415db53ea84c9b89c1589bed`
+- divergence: local custom branch is 2 commits ahead; upstream has 0 commits beyond the merge base.
+
+T-002 still requires an Executor-side drift check before release preparation so that a newly-arrived security or data-integrity fix cannot be silently ignored.
