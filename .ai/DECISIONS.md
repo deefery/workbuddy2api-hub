@@ -51,7 +51,7 @@ Decision:
 
 - The production NAS Compose configuration uses `ghcr.io/deefery/workbuddy2api-hub` with an explicitly supplied release tag.
 - `latest` may be used deliberately for testing, but it is not the production default.
-- Prefer fork versions in the form `<upstream-version>-deefery.<n>` while the fork remains closely based on upstream releases, and use the matching `v<fork-version>` tag.
+- Use APK-compatible dot-numeric fork revisions in the form `<upstream-major>.<upstream-minor>.<upstream-patch>.<fork-revision>` while the fork remains closely based on upstream (for example upstream `1.7.2` fork revision 1 -> `1.7.2.1`), with matching `v<fork-version>` tag.
 - Before creating that `v*` tag, update both source version strings in `wb_proxy.py` to the exact fork version so the upstream `tag == source version` release guard remains valid.
 
 Why:
@@ -136,3 +136,19 @@ Why:
 
 - GitHub disables workflows on newly-created forks until explicitly activated, and workflow registration is evaluated from the fork's default branch.
 - Our maintained release line is `custom/main`; making it the default makes Actions/release UI behavior match the branch users are actually meant to consume, while preserving `main` for clean upstream synchronization.
+
+## D-010 — Fork release versions must satisfy OpenWrt APK version grammar
+
+Status: ACCEPTED
+
+Decision:
+
+- Maintained-fork source/package versions use a dot-numeric fourth component for the fork revision, e.g. `1.7.2.1`.
+- The first three components retain the upstream base identity; local update discovery compares that base triplet against strict upstream stable `X.Y.Z` releases.
+- Do not use the earlier `1.7.2-deefery.1` style for source/package versions while OpenWrt APK assets are part of the release contract.
+
+Why:
+
+- Real OpenWrt 25.x SDK packaging proved `apk mkpkg` rejects `1.7.2-deefery.1-r1` as an invalid package version even after the packager parser was fixed.
+- OpenWrt's APK migration guidance expects package versions shaped like `<major>.<minor>.<fixup>[.<sub1>...]`; `1.7.2.1` satisfies that constraint and still preserves a visible fork revision.
+- This keeps one exact version identity across `wb_proxy.py`, OpenWrt `PKG_VERSION`, Git tag, release assets and container image.

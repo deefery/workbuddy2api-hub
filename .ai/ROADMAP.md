@@ -131,107 +131,55 @@ Reviewer PASS requires:
 
 ## 6. T-003 — First Fork Release + GHCR
 
-### Outcome
+Status: **PASS — Gate B**
 
-Publish the reviewed/integrated current code line as the first maintained-fork release and obtain a verifiable multi-architecture GHCR image without touching the NAS.
+Final release identity:
 
-Release source commit: `0c719417dc333f1f75b9a62eec47740c98520d4e`
-Version: `1.7.2-deefery.1`
-Tag: `v1.7.2-deefery.1`
+- source commit: `fbd06b779991bad3c716f193a96deadfcb35cd71`;
+- version: `1.7.2.1`;
+- tag: `v1.7.2.1`;
+- Release: `https://github.com/deefery/workbuddy2api-hub/releases/tag/v1.7.2.1`;
+- GHCR: `ghcr.io/deefery/workbuddy2api-hub:v1.7.2.1`;
+- OCI index digest: `sha256:cc6cf1cd0896bd8f55979532d5c1b94aae8369ed596abc672cdbb8197b2bc697`;
+- platforms: `linux/amd64`, `linux/arm64` (plus BuildKit attestation manifests).
 
-### Native release sequence
+The native draft-first release path was preserved end to end. Tag tests run `38276504575`, release run `38276504643`, release-checksums run `38276925510`, and Docker publish run `38276925393` all passed. The release contains portable ZIP, IPK, APK and checksum assets. Anonymous NAS pull succeeded.
 
-The repository already implements a two-stage release pipeline. T-003 must preserve it:
+Two failed pre-publication attempts were useful release validation rather than accepted releases. `v1.7.2-deefery.1` first exposed digits-only packager parsing, then exposed that OpenWrt 25.x apk-tools rejects the hyphenated version itself. No Release/GHCR image was published from those attempts. The obsolete tag was deleted. The final APK-compatible maintained-fork scheme is numeric dot revision, e.g. upstream `1.7.2` fork revision 1 -> `1.7.2.1`.
 
-```text
-Project Owner authorizes release operations
-  -> push custom/main so the reviewed source commit is reachable on origin
-  -> create/push exact tag v1.7.2-deefery.1 at the release source commit
-  -> tests.yml runs full matrix + tag/source assertion
-  -> release.yml waits for the full matrix, builds ZIP/IPK/APK/checksums
-  -> release.yml creates/updates a Draft Release only
-  -> verify Draft Release, assets, tag/commit identity and successful workflows
-  -> Project Owner publish authorization (or prior explicit authorization covering this stage)
-  -> publish the existing Draft Release
-  -> release published event triggers docker-publish.yml
-  -> GHCR exact tag + multi-arch OCI index/digest verified
-  -> Gate B review
-```
-
-Do not manually create a published Release ahead of the tag-triggered release workflow. Do not bypass the Draft Release gate.
-
-### Authorization gates
-
-External effects are not implied by READY status.
-
-- Stage A requires Project Owner authorization before pushing `custom/main`, creating/pushing the release tag, or otherwise mutating the GitHub fork.
-- Stage B requires Project Owner authorization to publish the generated Draft Release unless the Owner's explicit T-003 authorization clearly covers both stages.
-- Publishing the Release is understood to trigger GHCR publication through the existing repository workflow.
-- No NAS write, pull, start, restart, network exposure, or credential configuration is part of T-003.
-
-### Acceptance / Gate B inputs
-
-- exact tag `v1.7.2-deefery.1` resolves to release source commit `0c719417dc333f1f75b9a62eec47740c98520d4e`;
-- tag/source/OpenWrt version assertions pass without weakening the guard;
-- the tag-triggered full test matrix passes on all expected legs;
-- tag-triggered `release.yml` passes and the generated release assets are present;
-- the existing Draft Release is deliberately published rather than replaced/bypassed;
-- `docker-publish.yml` triggered by the published Release passes;
-- GHCR contains `ghcr.io/deefery/workbuddy2api-hub:v1.7.2-deefery.1`;
-- the OCI image index includes at least `linux/amd64` and `linux/arm64`;
-- the immutable image/index digest is recorded;
-- GHCR package visibility is recorded, and if private the downstream pull-auth requirement is documented without storing credentials in Git;
-- no NAS operation occurred;
-- Executor handoff records workflow run identities/URLs, release identity, asset list, image digest/platform evidence, gaps and deviations.
-
-The moving `latest` tag may also be produced by the existing non-prerelease Docker workflow, but it is not accepted as the production identity and will not be used as the T-004 deployment pin.
-
-### Attempt 1 / R1 status
-
-The first real tag-triggered attempt reached the repository release gate successfully far enough to prove the full test matrix and tag/source assertion, but `release.yml` failed in `openwrt packages` before Draft Release creation. `wrt/openwrt/build-ipk.sh` parses `server_version` with a digits/dots-only expression, so the approved fork version `1.7.2-deefery.1` is rejected as unparseable.
-
-T-003 is therefore `REVISE — R1`. R1 must be a minimal release-engineering compatibility fix: preserve exact equality between detected source version and OpenWrt `PKG_VERSION`, allow the approved fork suffix in the detected source version, add focused regression coverage, rerun relevant local/full tests, and return for Reviewer approval. No further tag mutation, Draft Release publication, GHCR publication, or NAS operation occurs until R1 PASS.
 ## 7. T-004 — NAS Preflight + First Deployment
 
-### Phase A: read-only preflight
+Status: **PASS — Gate C**
 
-Before deployment, collect real NAS facts instead of assuming paths/settings:
+Observed preflight:
 
-- QTS / Container Station / Docker availability;
-- CPU architecture and Compose capability;
-- free storage and intended deployment volume/path;
-- port `8788` conflicts;
-- existing container/directory conflicts;
-- DNS/outbound access needed to pull GHCR;
-- whether GHCR authentication is required;
-- ability to pull the exact reviewed image tag/digest.
+- QNAP NAS, `x86_64`, QTS `5.2.10`;
+- Container Station Docker `27.1.2-qnap8`, Compose `v2.29.1-qnap2`;
+- `/share/CACHEDEV1_DATA` had about 302 GB free at deployment time;
+- host port `8788` was unused;
+- target directory `/share/Container/workbuddy2api-hub` was unused;
+- GHCR outbound access worked and exact image could be pulled anonymously.
 
-The NAS-pulled image identity must match T-003 evidence before start.
+Deployment:
 
-### Phase B: first deployment
+- path: `/share/Container/workbuddy2api-hub`;
+- container: `wb-proxy`;
+- image pin: `ghcr.io/deefery/workbuddy2api-hub:v1.7.2.1`;
+- OCI index digest expected/pulled: `sha256:cc6cf1cd0896bd8f55979532d5c1b94aae8369ed596abc672cdbb8197b2bc697`;
+- port: `0.0.0.0:8788 -> 8788/tcp`;
+- state: `running`, `healthy`, restart count `0`;
+- persistent mounts: host `data/accounts` and `data/usage`, both RW.
 
-Requires Project Owner authorization for NAS writes/start/restart.
+Gate C evidence:
 
-Deploy using the maintained fork Compose definition with:
+- `/health` passed locally on NAS and from an intended LAN client;
+- dashboard returned HTTP 200;
+- anonymous `/v1/models` returned 401 as expected because API-key enforcement is enabled;
+- `docker compose down` / `up -d` recovered healthy and preserved settings state;
+- forced container recreation recovered healthy and preserved the exact settings-file hash;
+- no public exposure or router change was made.
 
-- explicit immutable release tag, not a moving production default;
-- host-persistent `accounts` and `usage` directories;
-- no secret committed to repository/Compose;
-- first state classified as `DEPLOYED_CANDIDATE`, not production accepted.
-
-### Gate C
-
-Deployment PASS requires at minimum:
-
-- container running and health becomes healthy;
-- expected image/tag/digest running;
-- expected host port listening;
-- persistent directories writable and mapped correctly;
-- no restart loop or immediate fatal errors.
-
-Real account/API acceptance is T-005, not silently folded into “container started”.
-
-## 8. T-005 — Real Functional + Persistence Acceptance
+Real account/protocol acceptance remains deliberately in T-005 rather than being hidden inside deployment PASS.## 8. T-005 — Real Functional + Persistence Acceptance
 
 ### Outcome
 

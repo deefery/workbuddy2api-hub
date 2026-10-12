@@ -1,6 +1,6 @@
 # workbuddy2api-hub — maintained fork
 
-Status: T-003 READY — awaiting Project Owner release authorization
+Status: T-004 GATE C PASS — v1.7.2.1 deployed healthy on NAS; T-005 real-account acceptance pending
 
 ## Purpose
 
@@ -53,10 +53,9 @@ Completed:
 
 Not yet done:
 
-- No NAS deployment has been performed.
-- No custom Docker image has been released from this fork yet.
-- T-001 implementation passed review in isolated branch/worktree `task/T-001` / `C:\_AI\projects\.webcodex-worktrees\workbuddy2api-hub-f7c5240a`, based on `17c544009898ad3d387b40dce6343c66334f2987`. The release/deployment path is defined; NAS deployment and external publishing remain separate operations.
-
+- T-005 real WorkBuddy-account/API acceptance is not complete because no real account has been OAuth-added to this fresh NAS deployment yet.
+- The dashboard still starts with its upstream default panel password `admin`; first interactive login must change it before production acceptance.
+- No public reverse proxy/domain exposure has been added; first baseline remains LAN-only.
 ## Current capability
 
 T-001 establishes the fork-owned Docker release/deployment path so a GitHub Release in this fork can publish `ghcr.io/deefery/workbuddy2api-hub`, while the NAS deployment uses an explicitly pinned image tag and preserves runtime state.
@@ -82,32 +81,37 @@ T-002 still requires an Executor-side drift check before release preparation so 
 
 ## Active task
 
-T-003 First Fork Release + GHCR is `REVISE — R1` after the first real tag-triggered release attempt exposed an OpenWrt packaging compatibility defect.
+T-003 and T-004 are complete. T-005 Real Functional + Persistence Acceptance is next and is blocked only on interactive real-account setup / credential posture.
 
-T-002 integration facts:
+### T-003 final release facts
 
-- Review 2 approved candidate: `f26d7bab9eb9ec9768ba0325a71506ee1859cdba`.
-- Integrated release-source commit on `custom/main`: `0c719417dc333f1f75b9a62eec47740c98520d4e`.
-- The integrated T-002 product/test paths were verified identical to the approved candidate after cherry-pick integration.
+- Final release source commit: `fbd06b779991bad3c716f193a96deadfcb35cd71`.
+- Version/tag: `1.7.2.1` / `v1.7.2.1`.
+- Published Release: `https://github.com/deefery/workbuddy2api-hub/releases/tag/v1.7.2.1`.
+- Full tag test matrix: run `38276504575` — PASS.
+- Draft-first release workflow: run `38276504643` — PASS, including portable ZIP, IPK, APK, checksums and Draft Release writer.
+- Release checksums workflow: run `38276925510` — PASS.
+- Docker publication workflow: run `38276925393` — PASS.
+- GHCR image: `ghcr.io/deefery/workbuddy2api-hub:v1.7.2.1`.
+- OCI index digest: `sha256:cc6cf1cd0896bd8f55979532d5c1b94aae8369ed596abc672cdbb8197b2bc697`.
+- Manifest includes `linux/amd64` and `linux/arm64`; NAS pulled the image without registry login, proving anonymous pull is available for this package.
+- Earlier `v1.7.2-deefery.1` attempts were never published and the obsolete remote tag was deleted. Attempt 1 exposed a packager parser bug; attempt 2 proved OpenWrt apk-tools rejects the hyphenated fork version. The final dot-numeric fork revision scheme is documented in `.ai/DECISIONS.md`.
 
-T-003 attempt 1 facts:
+### T-004 NAS deployment facts
 
-- Project Owner explicitly authorized full T-003 publication through GHCR, excluding NAS operations.
-- `custom/main` was pushed to `origin`.
-- The fork's GitHub Actions were initially dormant because this is a fork; Actions were explicitly activated through the repository permissions API.
-- The fork default branch was changed to `custom/main`, while `main` remains the upstream-sync branch.
-- Exact tag `v1.7.2-deefery.1` was pushed at `0c719417dc333f1f75b9a62eec47740c98520d4e` after workflow activation.
-- `tests.yml` run `38270657497` passed the complete matrix and tag/source assertion.
-- `release.yml` run `38270657526` passed the version gate and required full-matrix gate, then failed in `openwrt packages` before any Draft Release could be written.
-- Failure: `wrt/openwrt/build-ipk.sh` line 162 extracts `server_version` with `[0-9.]*`, so fork version `1.7.2-deefery.1` is reported as unparseable.
-- No GitHub Release was published, no GHCR image was produced, and no NAS operation occurred.
+- NAS: QNAP TS-451D class host, observed `x86_64`, QTS `5.2.10`.
+- Container Station Docker: `27.1.2-qnap8`; Compose: `v2.29.1-qnap2`.
+- Deployment path: `/share/Container/workbuddy2api-hub`.
+- Host/container port: `8788 -> 8788`; port was free before deployment.
+- Container: `wb-proxy`.
+- Running image: exact tag `ghcr.io/deefery/workbuddy2api-hub:v1.7.2.1`.
+- Persistent mounts: `data/accounts -> /app/accounts`, `data/usage -> /app/usage`, both RW.
+- `/health`: PASS from NAS localhost and a LAN client; container health is `healthy`, restart count `0`.
+- Dashboard root returns HTTP 200; anonymous `/v1/models` correctly returns HTTP 401, confirming API-key enforcement is active.
+- `docker compose down` followed by `up -d` returned healthy and preserved `data/accounts/settings.json` hash.
+- `docker compose up -d --force-recreate` also returned healthy and preserved the same settings hash exactly.
+- Evidence: `.ai/handoffs/T-004.md` and `.ai/reviews/T-003-review-final.md`.
 
-T-003 R1 is intentionally narrow: make the OpenWrt release packager accept the already-approved fork version identity without weakening source/package equality checks, add regression coverage, then return for Reviewer approval before retag/release retry.
+### T-005 remaining acceptance
 
-- Task contract: `.ai/tasks/T-003.md`.
-- Attempt 1 evidence: `.ai/reviews/T-003-attempt1.md`.
-- Executor R1 prompt: `.ai/tasks/T-003-executor-rework-R1.md`.
-- Branch/worktree remain `task/T-003` / `C:\_AI\projects\.webcodex-worktrees\workbuddy2api-hub-13f2d723`.
-- WebCodex worktree project: `agent:dee-gb-r-7bcf9574c2454a66:workbuddy2api-hub-13f2d723-f89e5546`.
-
-T-004 remains blocked until T-003 Gate B PASS.
+Required interactive items are: change the default panel password, add a real WorkBuddy account through dashboard OAuth, then exercise authenticated `/v1/models`, OpenAI Chat Completions (stream/non-stream), Responses and Anthropic Messages with real upstream traffic. T-006 production closeout remains blocked until that matrix is complete.
