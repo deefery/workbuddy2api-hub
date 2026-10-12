@@ -64,9 +64,23 @@ def parse_version(text):
     return tuple(int(part) for part in match.groups())
 
 
+def parse_current_version(text):
+    """解析当前运行版本的基础 (major, minor, patch)；其它一律 None。
+
+    本地运行版本（current_version）允许携带发布后缀（例如 fork 标识
+    -deefery.1、构建元数据等），更新发现按其基础主次修补版本号进行比较。
+    远端 release 依然严格仅接受 parse_version（纯稳定版本号）。
+    """
+    raw = str(text or "").strip()
+    match = re.match(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$", raw)
+    if not match:
+        return None
+    return tuple(int(part) for part in match.groups())
+
+
 def is_newer(candidate, current):
     """candidate 是否严格新于 current；任一边不可解析就是 False。"""
-    left, right = parse_version(candidate), parse_version(current)
+    left, right = parse_version(candidate), parse_current_version(current)
     return bool(left and right and left > right)
 
 

@@ -142,6 +142,21 @@ class VersionComparisonTests(unittest.TestCase):
         self.assertFalse(wb_updates.is_newer("1.6.16", "1.6.17"))
         self.assertFalse(wb_updates.is_newer("garbage", "1.6.17"))
 
+    def test_fork_suffixed_current_version_compares_on_base_semver(self):
+        fork_cur = "1.7.2-deefery.1"
+        self.assertIsNone(wb_updates.parse_version(fork_cur))
+        self.assertEqual(wb_updates.parse_current_version(fork_cur), (1, 7, 2))
+        self.assertEqual(wb_updates.parse_current_version("v1.7.2-deefery.1"), (1, 7, 2))
+        self.assertEqual(wb_updates.parse_current_version("1.7.2+build.42"), (1, 7, 2))
+        self.assertTrue(wb_updates.is_newer("1.7.3", fork_cur))
+        self.assertTrue(wb_updates.is_newer("1.8.0", fork_cur))
+        self.assertTrue(wb_updates.is_newer("2.0.0", fork_cur))
+        self.assertFalse(wb_updates.is_newer("1.7.2", fork_cur))
+        self.assertFalse(wb_updates.is_newer("1.7.1", fork_cur))
+        # Remote candidate must remain strict stable semver
+        self.assertFalse(wb_updates.is_newer("1.7.3-rc1", fork_cur))
+        self.assertFalse(wb_updates.is_newer("1.7.3-deefery.1", fork_cur))
+
 
 class ReleasePickingTests(unittest.TestCase):
     def test_newer_stable_release_wins(self):
