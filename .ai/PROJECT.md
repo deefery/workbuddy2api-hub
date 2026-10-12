@@ -1,6 +1,6 @@
 # workbuddy2api-hub — maintained fork
 
-Status: T-002 READY — awaiting Executor
+Status: T-002 REVISE — Review 1 blockers returned to Executor
 
 ## Purpose
 
@@ -82,12 +82,17 @@ T-002 still requires an Executor-side drift check before release preparation so 
 
 ## Active task
 
-T-002 First Release Readiness is READY.
+T-002 First Release Readiness is REVISE after Reviewer Gate A / Review 1.
 
 - Approved code base: `271f41c2ac710df74ed5231df02baaec4e05d9b3`
 - Branch: `task/T-002`
 - Executor worktree: `C:\_AI\projects\.webcodex-worktrees\workbuddy2api-hub-d0206b24`
 - Task contract: `.ai/tasks/T-002.md`
 - Executor start prompt: `.ai/tasks/T-002-executor-start.md`
+- Review 1: `.ai/reviews/T-002-review1.md`
+- Executor R1 rework prompt: `.ai/tasks/T-002-executor-rework-R1.md`
+- Executor candidate observed: `d269edcf031db46c3af8f3a8aeb5a98b41d0d8ee`; handoff commit: `bbd7479c243a64374aeb0d83490131b980d50440`
+
+Review 1 independently reconfirmed zero upstream drift and reran the full suite at 141/141 PASS, but found a release-blocking functional regression: the fork-suffixed runtime version `1.7.2-deefery.1` is not parseable by the existing update checker, causing future upstream stable versions such as `1.7.3` or `1.8.0` to be reported as not newer. Review also found stale/misdirected release identity text in the README badge and OpenWrt package comment. T-003 is blocked until R1 is Reviewer PASS.
 
 No push, release publication, registry publication, or NAS operation is authorized by T-002.

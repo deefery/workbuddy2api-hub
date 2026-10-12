@@ -72,7 +72,7 @@ Retains authorization for operations with external/production impact, including:
 ```text
 T-001  Fork release/deploy path          DONE
   |
-T-002  First Release Readiness           READY — awaiting Executor
+T-002  First Release Readiness           REVISE — Review 1 R1
   |
 Gate A  Reviewer: RELEASE CANDIDATE PASS
   |
@@ -120,6 +120,10 @@ Reviewer PASS requires:
 - complete test evidence appropriate to the repository, not only the small release-engineering subset;
 - no unrelated product change or feature creep;
 - release candidate commit is explicit and clean.
+
+### Review 1 status
+
+`REVISE`. The initial candidate preserved the tag/source guard and passed the full suite, but the fork-suffixed runtime version exposed a previously untested compatibility defect in update discovery: the current-version parser accepts only plain `X.Y.Z`, so `1.7.2-deefery.1` makes later upstream stable versions appear not newer. R1 must preserve strict stable-tag filtering for remote releases while making the fork runtime version comparable to upstream stable versions. Release-facing documentation must also stop mixing the fork version with an upstream release link or stale version text.
 
 ## 6. T-003 — First Fork Release + GHCR
 
