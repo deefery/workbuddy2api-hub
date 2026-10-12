@@ -99,6 +99,9 @@ T-003 release identity:
 - Release source commit: `0c719417dc333f1f75b9a62eec47740c98520d4e`.
 - Task contract: `.ai/tasks/T-003.md`.
 - Executor start prompt: `.ai/tasks/T-003-executor-start.md`.
+- Branch: `task/T-003`.
+- Executor worktree: `C:\_AI\projects\.webcodex-worktrees\workbuddy2api-hub-13f2d723`.
+- WebCodex worktree project: `agent:dee-gb-r-7bcf9574c2454a66:workbuddy2api-hub-13f2d723-f89e5546`.
 
 The native repository release path is draft-first: pushing the exact `v*` tag starts the full test/release workflow and creates a Draft Release with packaged assets; publishing that existing Draft Release then triggers `.github/workflows/docker-publish.yml`, which publishes the fork-owned multi-architecture GHCR image. T-003 must use this path rather than manually bypassing it.
 

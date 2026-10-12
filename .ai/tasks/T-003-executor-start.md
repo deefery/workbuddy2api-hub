@@ -21,7 +21,7 @@ T-003 release source is immutable for this task:
 - tag: `v1.7.2-deefery.1`
 - required image: `ghcr.io/deefery/workbuddy2api-hub:v1.7.2-deefery.1`
 
-Operate from the Architect-prepared T-003 worktree/branch once provided. This task is a **release execution task, not a coding task**. Do not patch product code while releasing. If preflight exposes a source/release defect, stop and report `BLOCKED` or `DESIGN_CHANGE` with evidence.
+Operate from the Architect-prepared worktree `C:\_AI\projects\.webcodex-worktrees\workbuddy2api-hub-13f2d723` on branch `task/T-003` (WebCodex project `agent:dee-gb-r-7bcf9574c2454a66:workbuddy2api-hub-13f2d723-f89e5546`). This task is a **release execution task, not a coding task**. Do not patch product code while releasing. If preflight exposes a source/release defect, stop and report `BLOCKED` or `DESIGN_CHANGE` with evidence.
 
 The required native sequence is:
 
