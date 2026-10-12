@@ -72,9 +72,9 @@ Retains authorization for operations with external/production impact, including:
 ```text
 T-001  Fork release/deploy path          DONE
   |
-T-002  First Release Readiness           REVISE — Review 1 R1
+T-002  First Release Readiness           PASS — Gate A / Review 2
   |
-Gate A  Reviewer: RELEASE CANDIDATE PASS
+Gate A  Reviewer: RELEASE CANDIDATE PASS ✓
   |
 T-003  First Fork Release + GHCR
   |
@@ -124,6 +124,10 @@ Reviewer PASS requires:
 ### Review 1 status
 
 `REVISE`. The initial candidate preserved the tag/source guard and passed the full suite, but the fork-suffixed runtime version exposed a previously untested compatibility defect in update discovery: the current-version parser accepts only plain `X.Y.Z`, so `1.7.2-deefery.1` makes later upstream stable versions appear not newer. R1 must preserve strict stable-tag filtering for remote releases while making the fork runtime version comparable to upstream stable versions. Release-facing documentation must also stop mixing the fork version with an upstream release link or stale version text.
+
+### Review 2 status
+
+`PASS`. R1 added a separate current-version parser so the fork suffix is normalized only for the local running version while remote release candidates remain strict stable `X.Y.Z`; it also corrected the release badge target/text and removed stale OpenWrt artifact version text. Independent Review 2 verified the exact candidate `f26d7bab9eb9ec9768ba0325a71506ee1859cdba`, zero upstream drift, focused update tests 48/48, full suite 141/141, release checks 68/68, clean checkout, clean diff, and no scope creep. The remaining lack of a local Docker daemon is an accepted T-002 evidence gap to be closed by the real GHCR build in T-003.
 
 ## 6. T-003 — First Fork Release + GHCR
 
