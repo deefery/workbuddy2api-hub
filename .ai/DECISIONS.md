@@ -170,3 +170,54 @@ Why:
 - OpenMAIC already uses the shared Sub2API network, so dual-homing `wb-proxy` gives both services a stable internal endpoint with no host-IP hairpin.
 - Keeping a service-owned network preserves independent Compose lifecycle, rollback and fault isolation.
 - Docker DNS survives container recreation while fixed `172.29.x.x` addresses do not.
+
+## D-012 — Publish remote access through a dedicated Cloudflare Tunnel
+
+Status: ACCEPTED
+
+Decision:
+
+- Remote friends/family access will use a dedicated Cloudflare Tunnel running from the NAS deployment, not Tailscale membership and not a Worker-hosted WorkBuddy2API runtime.
+- The Tunnel is an inbound publication path only. `wb-proxy` continues to originate WorkBuddy traffic from the NAS network so the upstream network identity does not move to shared/rotating Cloudflare Worker egress.
+- Do not add WARP private-network routes, a bastion route, host networking, or a route for the household LAN. Only the explicitly published HTTP application surfaces are in scope.
+- Do not reuse `api.zhijic.com`; keep the existing general API gateway independently evolvable.
+
+Why:
+
+- Application publication gives relatives the service without granting their devices or agents network-level reachability into the household tailnet/LAN.
+- Keeping WorkBuddy outbound traffic on the NAS preserves the already-accepted runtime and a more stable upstream network identity.
+- A dedicated tunnel keeps credentials, rollback and blast radius separable from unrelated public services.
+
+## D-013 — Separate owner administration from the public API surface
+
+Status: ACCEPTED
+
+Decision:
+
+- `wb.zhijic.com` is the management hostname. It is protected by Cloudflare Access with deny-by-default owner-only identity policy, then by the application's existing panel password/session.
+- `wbapi.zhijic.com` is the client API hostname. It does not use interactive Cloudflare Access because ordinary OpenAI/Anthropic clients cannot complete a browser login flow.
+- The API hostname routes only the approved `/v1` protocol endpoints and returns a fixed 404 for other paths before they reach `wb-proxy`.
+- API callers authenticate with WorkBuddy2API's existing independent API keys. Give each person/client its own key so access can be attributed, restricted and revoked without sharing an owner credential.
+- Public client instructions use bearer headers; do not encourage API keys in query strings or URLs.
+
+Why:
+
+- The dashboard can manage accounts, settings and credentials and is not a family self-service portal.
+- Splitting hostnames prevents a generic API credential from becoming a path to the management plane and lets Cloudflare Access remain strong without breaking SDK compatibility.
+- The application already has multi-key attribution/model restrictions, so no second identity system is required for the API in this phase.
+
+## D-014 — Use Cloudflare WAF/rate limiting as edge safety, not API identity
+
+Status: ACCEPTED
+
+Decision:
+
+- Cloudflare Access and WorkBuddy2API API keys remain the authentication controls. WAF is for request/path filtering and managed edge protection; rate limiting is a coarse abuse circuit breaker.
+- Do not put interactive Challenge actions in front of `wbapi.zhijic.com` protocol requests because SDKs/agents cannot solve them reliably.
+- Do not blindly apply payload-signature WAF rules to LLM prompt bodies when they would reject legitimate code/security text; prefer narrow hostname/path rules and Cloudflare's baseline DDoS protections.
+- Before creating a rate-limit rule, verify current zone-plan capabilities. If the plan cannot match the `wbapi.zhijic.com` hostname, skip the Cloudflare rate rule rather than applying a zone-wide `/v1/*` rule that could affect `api.zhijic.com` or other APIs.
+
+Why:
+
+- WAF/rate limiting solve different problems from authentication and can create false positives or collateral throttling when applied too broadly.
+- Current Cloudflare documentation shows Free rate limiting has materially narrower match fields than higher plans, so the safe rule shape must be capability-checked at deployment time.

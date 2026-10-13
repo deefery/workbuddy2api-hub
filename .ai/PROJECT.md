@@ -147,3 +147,14 @@ The intended maintenance model is operator-triggered automation: check upstream 
 - `openmaic-app` and `sub2api` both resolve `wb-proxy` through Docker DNS and successfully reach `/health`.
 - After recreate, both WorkBuddy accounts remain ready and settings/usage hashes are unchanged.
 - Evidence: `.ai/tasks/T-008.md` and `.ai/handoffs/T-008.md`.
+
+### T-009 — Cloudflare Tunnel remote access
+
+Status: READY for Executor implementation on dedicated branch/worktree; production cutover remains an explicit external-impact gate.
+
+- Approved public-access direction: dedicated Cloudflare Tunnel from NAS; do not put relatives into the family Tailscale network and do not repurpose the existing `api.zhijic.com` gateway.
+- Preserve WorkBuddy upstream egress from `wb-proxy` on the NAS; Tunnel is inbound publication only.
+- Split public surfaces: `wb.zhijic.com` is the owner/admin hostname behind Cloudflare Access plus the existing panel password; `wbapi.zhijic.com` is the OpenAI/Anthropic API hostname and exposes only an explicit `/v1/*` allowlist, authenticated by WorkBuddy2API per-user API keys.
+- Use a dedicated `cloudflared` service/network boundary with no Docker socket, host networking, privileged mode, WARP/private-network route, or bastion behavior.
+- Cloudflare rate limiting is optional/conditional on the zone plan being able to scope the rule to this hostname. Do not create a zone-wide `/v1/*` rate rule that could throttle the existing `api.zhijic.com` service.
+- Contract: `.ai/tasks/T-009.md`; prepared worktree: `C:\_AI\projects\.webcodex-worktrees\workbuddy2api-hub-t009-tunnel`.

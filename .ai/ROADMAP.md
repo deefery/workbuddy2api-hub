@@ -243,11 +243,19 @@ Contract: `.ai/tasks/T-007.md`.
 
 Evidence: `.ai/tasks/T-008.md`, `.ai/handoffs/T-008.md`.
 
+### T-009 — Cloudflare Tunnel remote access — READY
+
+Prepare and validate the maintained-fork deployment changes for remote access through a dedicated Cloudflare Tunnel while preserving the accepted NAS runtime and WorkBuddy egress. The public management plane and API plane are separated: owner-only `wb.zhijic.com` behind Cloudflare Access plus panel auth, and API-only `wbapi.zhijic.com` restricted to the approved `/v1` routes with per-user WorkBuddy2API keys.
+
+The Executor works in `C:\_AI\projects\.webcodex-worktrees\workbuddy2api-hub-t009-tunnel` from exact base `34154c48f7c3a2f2b40bbb5cc008295ac0e9a809`. Repo/config preparation and validation are READY. Actual NAS mutation, DNS/Tunnel creation, Access/WAF rule deployment and public cutover remain external-impact operations and require the Project Owner's explicit authorization before execution.
+
+Contract: `.ai/tasks/T-009.md`.
+
 ### Later candidates
 
 - logical provider registration in Sub2API / OpenMAIC;
 - UI/custom feature work;
-- deliberate Cloudflare/public reverse proxy/domain exposure;
+- public read-only/self-service UI for relatives (the T-009 dashboard remains owner/admin-only);
 - new protocols or broader refactors.
 
 None of these are silently folded into the production baseline.
