@@ -46,3 +46,6 @@ docker-compose.override.yml
 # Maintained-fork NAS deployment local state
 # The example file is tracked; the real .env may later contain local/private values.
 deploy/nas/.env
+
+# T-007 runtime audit evidence
+.ai/runtime/

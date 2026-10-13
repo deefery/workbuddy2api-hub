@@ -1,229 +1,124 @@
-<#
-.SYNOPSIS
-    Update-From-Upstream.ps1 — Operator-triggered safe upstream sync & auto-deploy pipeline (T-007)
-.DESCRIPTION
-    Executes the full upstream synchronization pipeline with pre-production gates,
-    draft-first GitHub release verification, GHCR multi-arch checking, NAS snapshotting,
-    and automatic rollback on post-deployment failure.
-#>
-
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory=$false)]
-    [string]$RepoPath = (Resolve-Path "$PSScriptRoot\..").Path,
-
-    [Parameter(Mandatory=$false)]
-    [switch]$DryRun,
-
-    [Parameter(Mandatory=$false)]
-    [switch]$NoFetch,
-
-    [Parameter(Mandatory=$false)]
-    [switch]$Force,
-
-    [Parameter(Mandatory=$false)]
-    [switch]$SkipNasDeploy,
-
-    [Parameter(Mandatory=$false)]
-    [string]$TargetNasHost = "192.168.31.13"
+    [string]$RepoPath,
+    [switch]$DryRun, [switch]$NoFetch, [switch]$Force, [switch]$SkipNasDeploy,
+    [switch]$AuthorizeRelease, [switch]$AuthorizeNas,
+    [string]$ReviewedUpstreamSha, [string]$ReviewedDraftTag, [string]$StateCompatibilitySha,
+    [string]$TargetNasHost, [string]$NasDirectory = '/share/Container/workbuddy2api-hub',
+    [string]$PythonExe, [scriptblock]$ExternalExecutor, [string]$ResumeReleaseEvidence
 )
-
-$ErrorActionPreference = "Stop"
-. "$PSScriptRoot\UpstreamSync.Common.ps1"
-
-Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host " WorkBuddy2API-Hub Safe Upstream Update Pipeline (T-007)  " -ForegroundColor Cyan
-if ($DryRun) {
-    Write-Host " MODE: DRY-RUN (Plan & Validate only, NO remote/NAS mutation)" -ForegroundColor Yellow
-} else {
-    Write-Host " MODE: OPERATOR-TRIGGERED EXECUTION" -ForegroundColor Magenta
+if (-not $RepoPath) { $RepoPath = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..')) }
+$ErrorActionPreference = 'Stop'
+. "$PSScriptRoot/UpstreamSync.Common.ps1"
+$e = @{
+    mode = $(if ($DryRun) { 'dry-run' } else { 'update' }); timestamp = (Get-Date).ToString('o')
+    status = 'STOPPED'; old_upstream_sha = $null; new_upstream_sha = $null
+    fork_version = $null; fork_tag = $null; ghcr_digest = $null
+    previous_nas_tag = $null; new_nas_tag = $null; final_health = 'NOT_RUN'; rollback_status = 'NOT_NEEDED'
+    mutates_nas = $false; publishes_release = $false
 }
-Write-Host "==========================================================" -ForegroundColor Cyan
-
-# Step 1: Clean Workspace Gate
-Write-Host "[Gate 1/16] Checking local workspace cleanliness..."
-$gitCtx = Get-SyncGitContext -Repo $RepoPath
-if (-not $gitCtx.IsClean -and -not $DryRun) {
-    Write-Error "STOP: Local workspace is DIRTY. Uncommitted changes detected. Aborting to protect uncommitted work."
-}
-if (-not $gitCtx.HasOrigin -or -not $gitCtx.HasUpstream) {
-    Write-Error "STOP: Remotes misconfigured. origin and upstream must both exist."
-}
-Write-Host "            Workspace is CLEAN. Branch: $($gitCtx.Branch), HEAD: $($gitCtx.HeadSha)" -ForegroundColor Green
-
-# Step 2: Fetch remotes
-if (-not $NoFetch) {
-    Write-Host "[Gate 2/16] Fetching origin and upstream..."
-    $fetchRes = Invoke-SafeFetch -Repo $RepoPath
-    if (-not $fetchRes.OriginSuccess -or -not $fetchRes.UpstreamSuccess) {
-        Write-Error "STOP: git fetch failed. origin_err='$($fetchRes.OriginError)', upstream_err='$($fetchRes.UpstreamError)'"
+try {
+    $e.last_gate = 'WORKSPACE'
+    $g = Get-SyncGitContext -Repo $RepoPath
+    $e.workspace_clean = $g.IsClean; $e.head_sha = $g.HeadSha
+    if (-not $g.IsClean -and -not $DryRun) { throw 'STOP: Local workspace is DIRTY' }
+    if (-not $g.HasOrigin -or -not $g.HasUpstream) { throw 'STOP: Required remotes missing' }
+    $e.last_gate = 'FETCH'
+    if (-not $NoFetch) {
+        $fetch = Invoke-SafeFetch -Repo $RepoPath
+        if (-not $fetch.OriginSuccess -or -not $fetch.UpstreamSuccess) { throw 'STOP: Fetch failed; refusing stale refs' }
     }
-    Write-Host "            Fetch completed successfully." -ForegroundColor Green
-} else {
-    Write-Host "[Gate 2/16] Fetching: SKIPPED (-NoFetch requested)" -ForegroundColor DarkGray
-}
-
-# Step 3 & 4: Detect drift & divergence
-Write-Host "[Gate 3/16] Evaluating upstream drift and divergence..."
-$delta = Get-UpstreamDeltaSummary -Repo $RepoPath -ForkBaseRef "origin/main" -UpstreamRef "upstream/main"
-if (-not $delta.HasUpdate) {
-    Write-Host "            No new commits in upstream. Workspace is already up to date. STOP." -ForegroundColor Green
-    $evidence = @{
-        mode       = if ($DryRun) { "dry-run" } else { "update" }
-        timestamp  = (Get-Date).ToString("o")
-        status     = "UP_TO_DATE"
-        head_sha   = $gitCtx.HeadSha
+    if ($ResumeReleaseEvidence) {
+        $e.last_gate = 'RESUME_RELEASE'
+        $saved = Get-Content -LiteralPath $ResumeReleaseEvidence -Raw -Encoding UTF8 | ConvertFrom-Json
+        $repo = [IO.Path]::GetFullPath($saved.integration_path)
+        $root = [IO.Path]::GetFullPath((Join-Path $RepoPath '.ai/runtime')) + [IO.Path]::DirectorySeparatorChar
+        if (-not $repo.StartsWith($root, [StringComparison]::OrdinalIgnoreCase) -or
+            $saved.fork_tag -notmatch '^v\d+\.\d+\.\d+\.\d+$' -or
+            $saved.integration_sha -notmatch '^[a-f0-9]{40}$' -or
+            $saved.new_upstream_sha -notmatch '^[a-f0-9]{40}$' -or
+            ($saved.status -ne 'DRAFT_READY_AWAITING_REVIEW' -and $saved.last_gate -ne 'RELEASE_PUBLISH')) {
+            throw 'STOP: Invalid release continuation evidence'
+        }
+        if (-not (Get-SyncGitContext -Repo $repo).IsClean) { throw 'STOP: Continuation worktree dirty' }
+        if ((Assert-SyncGit -Repo $repo -Arguments @('rev-parse','HEAD')) -ne $saved.integration_sha -or
+            (Assert-SyncGit -Repo $RepoPath -Arguments @('rev-parse',"refs/tags/$($saved.fork_tag)")) -ne $saved.integration_sha -or
+            (Assert-SyncGit -Repo $RepoPath -Arguments @('rev-parse','origin/custom/main')) -ne $saved.integration_sha -or
+            (Assert-SyncGit -Repo $RepoPath -Arguments @('rev-parse','origin/main')) -ne $saved.new_upstream_sha) {
+            throw 'STOP: Release continuation identity moved'
+        }
+        foreach ($key in @('old_upstream_sha','new_upstream_sha','fork_version','fork_tag','integration_path','integration_branch','integration_sha')) {
+            $e[$key] = $saved.$key
+        }
+        if ((Get-SourceReleaseVersion -Repo $repo) -ne $saved.fork_version -or -not (Test-T008DualNetworkConfig -Repo $repo).IsValid) {
+            throw 'STOP: Continued source identity/network changed'
+        }
+        $e.last_gate = 'TESTS'
+        if (-not (Invoke-FullTestSuiteGate -Repo $repo -PythonExe $PythonExe -Evidence $e).Success) { throw 'STOP: Continued full tests failed' }
+        $context = @{
+            Repo = $repo; SourceRepo = $RepoPath; ResumeRelease = $true; Sha = $saved.integration_sha
+            UpstreamSha = $saved.new_upstream_sha; NewTag = $saved.fork_tag
+            AuthorizeRelease = [bool]$AuthorizeRelease; AuthorizeNas = [bool]$AuthorizeNas
+            ReviewedDraftTag = $ReviewedDraftTag; StateCompatibilitySha = $StateCompatibilitySha
+            SkipNasDeploy = [bool]$SkipNasDeploy; TargetNasHost = $TargetNasHost; NasDirectory = $NasDirectory; PythonExe = $PythonExe
+        }
+        Invoke-ProductionGates -Context $context -Evidence $e -ExternalExecutor $ExternalExecutor
+        Write-Host $e.status
+        return
     }
-    Write-SyncAuditEvidence -Repo $RepoPath -EvidenceData $evidence | Out-Null
-    return
-}
-
-if ($delta.IsDivergent) {
-    Write-Error "STOP: Divergence detected between origin/main and upstream/main. Fast-forward merge is impossible without manual reconciliation."
-}
-Write-Host "            $($delta.CommitCount) new upstream commits detected. Clean fast-forward delta confirmed." -ForegroundColor Green
-
-# Step 5: Dangerous changes gate
-Write-Host "[Gate 4/16] Assessing upstream changes for risk..."
-$risks = Test-DangerousUpstreamChanges -Repo $RepoPath -ForkBaseRef "origin/main" -UpstreamRef "upstream/main"
-if ($risks.RequiresManualReview -and -not $Force) {
-    Write-Host "            HIGH RISK: Upstream introduced dangerous workflow, container, or storage changes." -ForegroundColor Red
-    foreach ($wf in $risks.WorkflowChanges) { Write-Host "              - Workflow: $wf" -ForegroundColor Red }
-    foreach ($dc in $risks.DeployChanges) { Write-Host "              - Deploy/Compose: $dc" -ForegroundColor Red }
-    foreach ($sc in $risks.StorageChanges) { Write-Host "              - Storage/Settings: $sc" -ForegroundColor Red }
-    Write-Error "STOP: Upstream changes require manual operator review before proceeding. Use -Force if review has been accepted."
-}
-Write-Host "            Risk assessment PASS. Risk level: $($risks.RiskLevel)" -ForegroundColor Green
-
-# Step 6: Version derivation
-Write-Host "[Gate 5/16] Determining version progression (D-004 / D-010)..."
-$currentSourceVer = Get-SourceReleaseVersion -Repo $RepoPath
-$upstreamProxyRes = Get-GitCommandOutput -Repo $RepoPath -Arguments @("show", "upstream/main:wb_proxy.py")
-$upstreamStableVer = $currentSourceVer
-if ($upstreamProxyRes.ExitCode -eq 0) {
-    $matchUp = [regex]::Match($upstreamProxyRes.StdOut, 'server_version\s*=\s*"wb-proxy/([^"]+)"')
-    if ($matchUp.Success) {
-        $upstreamStableVer = $matchUp.Groups[1].Value
+    $e.last_gate = 'DELTA'
+    $d = Get-UpstreamDeltaSummary -Repo $RepoPath
+    $e.old_upstream_sha = $d.ForkBaseSha; $e.new_upstream_sha = $d.UpstreamSha; $e.has_update = $d.HasUpdate
+    if ($d.IsDivergent) { throw 'STOP: Upstream/main divergence' }
+    $e.last_gate = 'VERSION'
+    $currentContent = Assert-SyncGit -Repo $RepoPath -Arguments @('show', 'custom/main:wb_proxy.py')
+    $current = Read-ExactVersion -Content $currentContent
+    $up = Get-UpstreamStableVersion -Repo $RepoPath
+    $v = Derive-NextForkVersion -UpstreamBaseVer $up -CurrentForkVer $current
+    $e.current_fork_version = $current; $e.upstream_version = $up
+    $e.fork_version = $v.ProposedForkVersion; $e.fork_tag = $v.ProposedTag
+    if (-not $d.HasUpdate) { $e.status = 'UP_TO_DATE'; return }
+    $e.last_gate = 'RISK'
+    $risk = Test-DangerousUpstreamChanges -Repo $RepoPath
+    $e.risk_level = $risk.RiskLevel
+    if ($risk.RequiresManualReview -and $ReviewedUpstreamSha -cne $d.UpstreamSha) {
+        throw 'STOP: HIGH-RISK/packaging changes require exact upstream SHA review; -Force cannot bypass'
     }
-}
-$versionDeriv = Derive-NextForkVersion -UpstreamBaseVer $upstreamStableVer -CurrentForkVer $currentSourceVer
-$newVer = $versionDeriv.ProposedForkVersion
-$newTag = $versionDeriv.ProposedTag
-Write-Host "            Current fork version : $currentSourceVer"
-Write-Host "            Upstream base version: $upstreamStableVer"
-Write-Host "            Proposed fork version: $newVer" -ForegroundColor Cyan
-Write-Host "            Proposed release tag : $newTag" -ForegroundColor Cyan
-
-# Step 7: Verify T-008 Dual Network Configuration
-Write-Host "[Gate 6/16] Verifying T-008 dual network configuration in Compose..."
-$t008Check = Test-T008DualNetworkConfig -Repo $RepoPath
-if (-not $t008Check.IsValid) {
-    Write-Error "STOP: T-008 dual network invariant violated. Reason: $($t008Check.Reason)"
-}
-Write-Host "            T-008 dual network configuration intact (default + sub2api)." -ForegroundColor Green
-
-# Step 8: Release Identity & Tests
-Write-Host "[Gate 7/16] Validating release engineering and integration gates..."
-if (-not $DryRun) {
-    Update-ReleaseIdentityFiles -Repo $RepoPath -Version $newVer | Out-Null
-    Write-Host "            Release identity updated in wb_proxy.py and Makefile." -ForegroundColor Green
-} else {
-    Write-Host "            [DryRun] Release identity update planned (target version: $newVer)." -ForegroundColor Yellow
-}
-
-$gatesRes = Test-ReleaseGates -Repo $RepoPath
-if (-not $gatesRes.Success) {
-    Write-Error "STOP: Release engineering gates failed! Output:`n$($gatesRes.Output)"
-}
-Write-Host "            Release engineering tests PASSED." -ForegroundColor Green
-
-# Step 9: Dry-Run Plan Summary
-if ($DryRun) {
-    Write-Host "`n==========================================================" -ForegroundColor Cyan
-    Write-Host " DRY-RUN PLAN REPORT (NO ACTIONS EXECUTED)                " -ForegroundColor Cyan
-    Write-Host "==========================================================" -ForegroundColor Cyan
-    Write-Host " - Old Upstream SHA      : $($delta.ForkBaseSha)"
-    Write-Host " - New Upstream SHA      : $($delta.UpstreamSha)"
-    Write-Host " - Merge Base SHA        : $($delta.MergeBaseSha)"
-    Write-Host " - Delta Commit Count    : $($delta.CommitCount)"
-    Write-Host " - Upstream Base Version : $upstreamStableVer"
-    Write-Host " - Proposed Fork Version : $newVer"
-    Write-Host " - Planned Git Branch    : sync/upstream-v$newVer"
-    Write-Host " - Planned Git Tag       : $newTag"
-    Write-Host " - Current Production Tag: v$currentSourceVer"
-    Write-Host " - Proposed Production Tag: $newTag"
-    Write-Host " - Target NAS Deployment : $TargetNasHost (deploy/nas)"
-    Write-Host " - Will Mutate NAS?      : NO (Dry-Run mode)"
-    Write-Host " - Will Push to Remote?  : NO (Dry-Run mode)"
-    Write-Host " - Will Create Release?  : NO (Dry-Run mode)"
-    Write-Host "==========================================================" -ForegroundColor Cyan
-
-    $evidence = @{
-        mode                   = "dry-run"
-        timestamp              = (Get-Date).ToString("o")
-        old_upstream_sha       = $delta.ForkBaseSha
-        new_upstream_sha       = $delta.UpstreamSha
-        upstream_version       = $upstreamStableVer
-        current_fork_version   = $currentSourceVer
-        proposed_fork_version  = $newVer
-        planned_tag            = $newTag
-        current_production_tag = "v$currentSourceVer"
-        proposed_production_tag= $newTag
-        nas_target             = $TargetNasHost
-        mutates_nas            = $false
-        tests_passed           = $gatesRes.Success
-        status                 = "DRY_RUN_PASSED"
+    $e.last_gate = 'T008'
+    $net = Test-T008DualNetworkConfig -Repo $RepoPath
+    $e.t008_dual_network = $net.IsValid
+    if (-not $net.IsValid) { throw 'STOP: T-008 dual-network invariant failed' }
+    if ($DryRun) {
+        $e.status = 'DRY_RUN_PLAN_ONLY'
+        Write-Host "DRY-RUN PLAN: $($e.fork_tag), upstream $($d.UpstreamSha). Integration/tests/external operations NOT RUN."
+        return
     }
-    $auditFile = Write-SyncAuditEvidence -Repo $RepoPath -EvidenceData $evidence
-    Write-Host "Audit log written to: $auditFile" -ForegroundColor DarkGray
-    return
-}
-
-# --- Production External Mutation Boundary (Requires Explicit Operator Authorization) ---
-Write-Host "[Gate 8/16] Git Push & Tagging..."
-Write-Host "            [Simulated/Live Gate] Push integration branch and exact tag $newTag..."
-# (In real execution, git push origin ... and git push origin $newTag)
-
-Write-Host "[Gate 9/16] Draft-First GitHub Release Verification..."
-Write-Host "            [Draft-First Gate] Verifying Draft Release for tag $newTag..."
-Write-Host "            [Draft-First Gate] Verifying assets: ZIP, IPK, APK, SHA256SUMS..."
-Write-Host "            [Draft-First Gate] Publishing reviewed Draft Release..."
-
-Write-Host "[Gate 10/16] GHCR Multi-Arch & Digest Verification..."
-Write-Host "            [GHCR Gate] Awaiting GHCR publication for tag $newTag..."
-Write-Host "            [GHCR Gate] Verifying linux/amd64 and linux/arm64..."
-$simulatedDigest = "sha256:cc6cf1cd0896bd8f55979532d5c1b94aae8369ed596abc672cdbb8197b2bc697"
-Write-Host "            [GHCR Gate] Immutable RepoDigest verified: $simulatedDigest"
-
-if ($SkipNasDeploy) {
-    Write-Host "[Gate 11/16] NAS Deployment SKIPPED as requested (-SkipNasDeploy)." -ForegroundColor Yellow
-    $evidence = @{
-        mode         = "update"
-        timestamp    = (Get-Date).ToString("o")
-        tag          = $newTag
-        digest       = $simulatedDigest
-        status       = "RELEASE_PUBLISHED_NAS_SKIPPED"
+    $e.last_gate = 'INTEGRATION'
+    $integration = Invoke-UpstreamGitIntegration -Repo $RepoPath -UpstreamTargetSha $d.UpstreamSha -ProposedVersion $e.fork_version -Evidence $e
+    $repo = $integration.Repo
+    if (-not (Test-T008DualNetworkConfig -Repo $repo).IsValid) { throw 'STOP: Merged T-008 invariant failed' }
+    Update-ReleaseIdentityFiles -Repo $repo -NewVersion $e.fork_version
+    $e.last_gate = 'TESTS'
+    $test = Invoke-FullTestSuiteGate -Repo $repo -PythonExe $PythonExe -Evidence $e
+    if (-not $test.Success) { throw 'STOP: Focused/full suite failed or skipped tests; no release mutation' }
+    Assert-SyncGit -Repo $repo -Arguments @('add', 'wb_proxy.py', 'wrt/openwrt/workbuddy2api/Makefile') | Out-Null
+    Assert-SyncGit -Repo $repo -Arguments @('commit', '-m', "Prepare fork $($e.fork_tag)") | Out-Null
+    $sha = Assert-SyncGit -Repo $repo -Arguments @('rev-parse', 'HEAD')
+    $e.integration_sha = $sha
+    $context = @{
+        Repo = $repo; SourceRepo = $RepoPath; ResumeRelease = $false; SyncBranch = $integration.SyncBranch; Sha = $sha; UpstreamSha = $d.UpstreamSha
+        OldMain = $integration.OldMain; OldCustom = $integration.OldCustom; NewTag = $e.fork_tag
+        AuthorizeRelease = [bool]$AuthorizeRelease; AuthorizeNas = [bool]$AuthorizeNas
+        ReviewedDraftTag = $ReviewedDraftTag; StateCompatibilitySha = $StateCompatibilitySha
+        SkipNasDeploy = [bool]$SkipNasDeploy; TargetNasHost = $TargetNasHost; NasDirectory = $NasDirectory; PythonExe = $PythonExe
     }
-    Write-SyncAuditEvidence -Repo $RepoPath -EvidenceData $evidence | Out-Null
-    return
+    Invoke-ProductionGates -Context $context -Evidence $e -ExternalExecutor $ExternalExecutor
+    Write-Host $e.status
+} catch {
+    # Never embed arbitrary command output, URLs or secret-bearing exceptions in evidence.
+    $e.stop_reason = "Failed at $($e.last_gate); see gate-specific local diagnostics"
+    Write-Error ("STOP: " + $e.stop_reason)
+} finally {
+    $audit = Write-SyncAuditEvidence -Repo $RepoPath -EvidenceData $e
+    Write-Host "Audit: $audit"
 }
-
-Write-Host "[Gate 11/16] NAS Pre-deployment Snapshot..."
-Write-Host "            Creating snapshot of .env, docker-compose.yml, data/accounts, data/usage..."
-
-Write-Host "[Gate 12/16] NAS Compose Tag Mutation..."
-Write-Host "            Setting WB_IMAGE_TAG=$newTag only..."
-
-Write-Host "[Gate 13/16] NAS Container Pull & Recreate..."
-Write-Host "            Recreating wb-proxy container..."
-
-Write-Host "[Gate 14/16] Container Health & RepoDigest Verification..."
-Write-Host "            Container running and healthy. RepoDigest matches published digest."
-
-Write-Host "[Gate 15/16] Accounts Readiness & Network Reachability..."
-Write-Host "            Accounts ready. Dual network reachability verified from openmaic-app & sub2api."
-
-Write-Host "[Gate 16/16] Authenticated API Smoke..."
-Write-Host "            Authenticated API smoke PASSED."
-
-Write-Host "`nSUCCESS: Upstream sync and deployment completed successfully." -ForegroundColor Green

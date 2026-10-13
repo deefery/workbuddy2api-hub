@@ -390,19 +390,14 @@ PR 贡献者（v1.4.5 之前的改动未进上方更新记录，这里一并列�
 
 ## 八、上游同步与安全更新 (Upstream Sync & Safe Deployment)
 
-为降低日常跟随 upstream 更新的维护成本并保障生产安全，仓库提供两个标准 Windows 运维入口：
+双击 **Check-Upstream.cmd** 可检查上游 SHA、风险、严格版本身份和 T-008 双网络。审计写入已忽略的本地目录，重复检查不会弄脏工作区。
 
-- **Check-Upstream.cmd**（只读检查）
-  - 安全检查 upstream 与 fork 之间的 commit delta 与版本基线；
-  - 自动检测工作流、数据存储与容器配置变更（如涉及 wb_settings.py 或 Compose 会标记 HIGH RISK）；
-  - 验证 T-008 双网络拓扑完整性（default + sub2api_sub2api-network）；
-  - 生成免密结构化审计证据，绝不创建 tag、不发布 Release、不触及生产 NAS。
+**Update-From-Upstream.cmd -DryRun -NoFetch** 仅检查并生成计划；不执行集成、测试、发布或 NAS 更新，也不会将这些未运行的门禁报告为通过。高风险变更必须先按精确上游 SHA 审核，旧的 -Force 不能绕过。
 
-- **Update-From-Upstream.cmd**（Operator 显式启动的完整更新入口）
-  - 支持 --dry-run 计划模式，输出完整 16 步更新计划（旧/新 SHA、推导版本、目标标签及回滚策略），不产生外部修改；
-  - 遵循 D-004 / D-010 四段式版本推导规则（X.Y.Z.N），严格拒绝破坏 OpenWrt APK 的连字符版本；
-  - 保持 D-008 draft-first 发布流程与 GHCR multi-arch 校验；
-  - 升级前自动创建生产快照（.env, docker-compose.yml, data/accounts, data/usage），部署失败时自动安全回滚至上一精确 Tag。
+实际更新在独立同步分支/worktree 中合并上游，更新两个源码版本和 OpenWrt PKG_VERSION 为 X.Y.Z.N，运行发布工程与完整套件。任何失败或整套测试文件跳过都停止发布，包括已知基线失败。发布和 NAS 操作各需明确授权；发布先停在 Draft Release，审核后按原审计记录续跑，再验证资产校验和、GHCR 双架构和不可变 digest。NAS 先停写快照，部署后检查健康、账号就绪、网络成员和鉴权 API；兼容性未确认则不部署，部署失败会恢复并验证之前的精确 tag/digest。
+
+操作参数、Draft 续跑与手动恢复见 [上游更新操作说明](tools/README-upstream-sync.md)。本轮验证采用临时 Git 仓库和注入的外部执行器；真实 GitHub/GHCR/NAS 整链试运行仍未执行。
+
 
 ## 九、免责声明 (Disclaimer)
 
