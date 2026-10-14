@@ -190,4 +190,4 @@ Status: PASS — Review 1 accepted; exact `b843ff3` 1.7.4-line local integration
 - Contract: `.ai/tasks/T-012.md`; handoff target: `.ai/handoffs/T-012.md`.
 ### T-013 — v1.7.4.1 Release & NAS Cutover
 
-Status: READY for local Phase 0 only. Accepted T-012 Review 1 is the release input. GitHub/GHCR/NAS mutations remain behind explicit Owner Gate A/B authorization. Production model-enumeration plus explicit Chat/Responses smoke is mandatory before final acceptance.
+Status: AWAITING_OWNER_RELEASE_AUTH. T-013 drift review re-anchored the exact release input to upstream `2fa6287` after the prior Gate A attempt correctly stopped. The previous authorization does not carry across the SHA change; GitHub/GHCR/NAS mutations remain behind fresh explicit Owner Gate A/B authorization. Production model-enumeration plus explicit Chat/Responses smoke remains mandatory before final acceptance.
