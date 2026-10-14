@@ -180,7 +180,7 @@ Status: BLOCKED — SUPERSEDED.
 - Contract: `.ai/tasks/T-011.md`; handoff target: `.ai/handoffs/T-011.md`.
 ### T-012 — Upstream v1.7.4-line HIGH-RISK integration
 
-Status: READY for Executor-hard local integration/review only.
+Status: PASS — Review 1 accepted; exact `b843ff3` 1.7.4-line local integration candidate accepted. External release/GHCR/NAS cutover remains separately authorized.
 
 - Exact target: current reviewed `upstream/main` `b843ff3c67280ed1e7187dc669eca7637b354315`, source version `1.7.4`.
 - Provenance: stable `v1.7.4` tag `a979b0a37b26d28c82897cdc1b6282d2080ae95c` plus one post-tag catalog fix.
