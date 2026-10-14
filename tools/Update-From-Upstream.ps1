@@ -56,7 +56,7 @@ try {
             (Assert-SyncGit -Repo $RepoPath -Arguments @('rev-parse','origin/main')) -ne $saved.new_upstream_sha) {
             throw 'STOP: Release continuation identity moved'
         }
-        foreach ($key in @('old_upstream_sha','new_upstream_sha','fork_version','fork_tag','integration_path','integration_branch','integration_sha','old_main_sha','old_custom_sha')) {
+        foreach ($key in @('old_upstream_sha','new_upstream_sha','current_fork_version','fork_version','fork_tag','integration_path','integration_branch','integration_sha','old_main_sha','old_custom_sha')) {
             $e[$key] = $saved.$key
         }
         if ((Get-SourceReleaseVersion -Repo $repo) -ne $saved.fork_version -or -not (Test-T008DualNetworkConfig -Repo $repo).IsValid) {
@@ -67,7 +67,7 @@ try {
         $context = @{
             Repo = $repo; SourceRepo = $RepoPath; ResumeRelease = (-not $retryPush); Sha = $saved.integration_sha
             OldMain = $saved.old_main_sha; OldCustom = $saved.old_custom_sha
-            UpstreamSha = $saved.new_upstream_sha; NewTag = $saved.fork_tag
+            UpstreamSha = $saved.new_upstream_sha; NewTag = $saved.fork_tag; CurrentTag = "v$($saved.current_fork_version)"
             AuthorizeRelease = [bool]$AuthorizeRelease; AuthorizeNas = [bool]$AuthorizeNas
             ReviewedDraftTag = $ReviewedDraftTag; StateCompatibilitySha = $StateCompatibilitySha
             SkipNasDeploy = [bool]$SkipNasDeploy; TargetNasHost = $TargetNasHost; NasDirectory = $NasDirectory; PythonExe = $PythonExe
@@ -118,7 +118,7 @@ try {
     $e.old_main_sha = $integration.OldMain; $e.old_custom_sha = $integration.OldCustom
     $context = @{
         Repo = $repo; SourceRepo = $RepoPath; ResumeRelease = $false; SyncBranch = $integration.SyncBranch; Sha = $sha; UpstreamSha = $d.UpstreamSha
-        OldMain = $integration.OldMain; OldCustom = $integration.OldCustom; NewTag = $e.fork_tag
+        OldMain = $integration.OldMain; OldCustom = $integration.OldCustom; NewTag = $e.fork_tag; CurrentTag = "v$($e.current_fork_version)"
         AuthorizeRelease = [bool]$AuthorizeRelease; AuthorizeNas = [bool]$AuthorizeNas
         ReviewedDraftTag = $ReviewedDraftTag; StateCompatibilitySha = $StateCompatibilitySha
         SkipNasDeploy = [bool]$SkipNasDeploy; TargetNasHost = $TargetNasHost; NasDirectory = $NasDirectory; PythonExe = $PythonExe

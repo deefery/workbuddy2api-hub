@@ -7,6 +7,7 @@ import hashlib
 import json
 import urllib.request
 import urllib.error
+import urllib.parse
 import re
 import shlex
 import subprocess
@@ -26,6 +27,20 @@ class ExternalGateError(RuntimeError):
         self.reason = reason
 
 
+def read_utf8_text(path):
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as e:
+        raise ExternalGateError("LOCAL_TEXT_IO_FAILURE", "Local UTF-8 text read failed") from e
+
+
+def write_utf8_text(path, value):
+    try:
+        Path(path).write_text(value, encoding="utf-8")
+    except (OSError, UnicodeError) as e:
+        raise ExternalGateError("LOCAL_TEXT_IO_FAILURE", "Local UTF-8 text write failed") from e
+
+
 def run(argv, *, cwd=None, stdin=None):
     stdin_bytes = None
     if stdin is not None:
@@ -36,8 +51,6 @@ def run(argv, *, cwd=None, stdin=None):
             stdin_bytes = stdin
     p = subprocess.run(argv, cwd=cwd, input=stdin_bytes, capture_output=True, timeout=180)
     if p.returncode:
-        if argv and argv[0] == "ssh" and p.returncode == 127:
-            raise ExternalGateError("REMOTE_DOCKER_NOT_FOUND", "Remote command failed (exit code 127)")
         raise RuntimeError("External command failed; output suppressed")
     return p.stdout.decode("utf-8", errors="replace")
 
@@ -73,7 +86,7 @@ def view_release(c):
 
 def verify_assets(c, release):
     v = c["NewTag"][1:]
-    recipe = (Path(c["Repo"]) / "wrt/openwrt/workbuddy2api/Makefile").read_text(encoding="utf-8")
+    recipe = read_utf8_text(Path(c["Repo"]) / "wrt/openwrt/workbuddy2api/Makefile")
     m = re.findall(r"^PKG_RELEASE:=(\d+)$", recipe, re.M)
     if len(m) != 1:
         raise RuntimeError("Unknown package release")
@@ -86,7 +99,7 @@ def verify_assets(c, release):
     run(["gh", "release", "download", c["NewTag"], "--repo", GITHUB_REPO,
          "--dir", str(dest), "--clobber"])
     hashes = {}
-    for line in (dest / "SHA256SUMS").read_text(encoding="utf-8").splitlines():
+    for line in read_utf8_text(dest / "SHA256SUMS").splitlines():
         match = re.fullmatch(r"([a-f0-9]{64})  (\S+)", line)
         if not match or match[2] in hashes or match[2] not in names - {"SHA256SUMS"}:
             raise RuntimeError("Invalid checksum manifest")
@@ -115,17 +128,21 @@ fi
 '''
 
 
-def ssh(c, script):
+def ssh(c, script, *, reason="SSH_SESSION_FAILURE"):
     host = c.get("TargetNasHost") or ""
     directory = c.get("NasDirectory") or ""
     if not re.fullmatch(r"(?:[a-zA-Z0-9_.-]+@)?[a-zA-Z0-9_.-]+", host):
-        raise RuntimeError("Explicit SSH host/alias required")
+        raise ExternalGateError("SSH_SESSION_FAILURE", "Explicit SSH host/alias required")
     if not re.fullmatch(r"/[a-zA-Z0-9_./-]+", directory) or ".." in directory.split("/"):
-        raise RuntimeError("Invalid NAS directory")
+        raise ExternalGateError("SSH_SESSION_FAILURE", "Invalid NAS directory")
     full_script = "set -eu\n" + REMOTE_DOCKER_PRELUDE + "cd " + shlex.quote(directory) + "\n" + script
-    # Payload only through stdin, no passwords in arguments/logs.
-    return run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, "sh", "-s"],
-               stdin=full_script)
+    try:
+        return run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, "sh", "-s"],
+                   stdin=full_script)
+    except ExternalGateError:
+        raise
+    except Exception as e:
+        raise ExternalGateError(reason, "Remote SSH/session operation failed") from e
 
 
 HEALTH_CODE = """import json,urllib.request
@@ -150,7 +167,7 @@ print('smoke-ok')
 
 
 def health(c, expected):
-    info = json.loads(ssh(c, "docker inspect wb-proxy\n"))[0]
+    info = json.loads(ssh(c, "docker inspect wb-proxy\n", reason="REMOTE_HEALTH_VERIFY_FAILURE"))[0]
     if info["State"].get("Health", {}).get("Status") != "healthy":
         raise RuntimeError("Container unhealthy")
     if info["Config"]["Labels"].get("com.docker.compose.project") != "workbuddy2api-hub":
@@ -158,13 +175,13 @@ def health(c, expected):
     networks = info["NetworkSettings"]["Networks"]
     if not {"workbuddy2api-hub_default", "sub2api_sub2api-network"} <= set(networks):
         raise RuntimeError("Dual-network membership lost")
-    image = json.loads(ssh(c, "docker image inspect " + shlex.quote(info["Image"]) + "\n"))[0]
+    image = json.loads(ssh(c, "docker image inspect " + shlex.quote(info["Image"]) + "\n", reason="REMOTE_HEALTH_VERIFY_FAILURE"))[0]
     if f"{IMAGE}@{expected}" not in image.get("RepoDigests", []):
         raise RuntimeError("Container RepoDigest mismatch")
     if c.get("Sha") and expected == c.get("Digest"):
         if image.get("Config", {}).get("Labels", {}).get("org.opencontainers.image.revision") != c["Sha"]:
             raise RuntimeError("Image revision mismatch")
-    status = json.loads(ssh(c, "docker exec wb-proxy python -c " + shlex.quote(HEALTH_CODE) + "\n"))
+    status = json.loads(ssh(c, "docker exec wb-proxy python -c " + shlex.quote(HEALTH_CODE) + "\n", reason="REMOTE_HEALTH_VERIFY_FAILURE"))
     if status["AccountsReady"] < c.get("AccountsReady", 1) or not status["KeyRequired"]:
         raise RuntimeError("Account/auth readiness lost")
     return {"Healthy": True, "NetworkOk": True, "AccountsReady": status["AccountsReady"],
@@ -181,12 +198,12 @@ def await_health(c, expected):
 
 
 def smoke(c):
-    if ssh(c, "docker exec wb-proxy python -c " + shlex.quote(SMOKE_CODE) + "\n").strip() != "smoke-ok":
+    if ssh(c, "docker exec wb-proxy python -c " + shlex.quote(SMOKE_CODE) + "\n", reason="AUTHENTICATED_SMOKE_FAILURE").strip() != "smoke-ok":
         raise RuntimeError("Authenticated smoke failed")
     return True
 
 
-def deploy(c, tag, digest):
+def deploy(c, tag, digest, *, reason="NAS_DEPLOY_FAILURE"):
     if not TAG_RE.fullmatch(tag) or not DIGEST_RE.fullmatch(digest):
         raise RuntimeError("Invalid exact deployment identity")
     # Keep the Compose expression/persistent mounts unchanged; replace one exact env field.
@@ -205,7 +222,7 @@ docker compose up -d --no-deps --pull never wb-proxy >/dev/null 2>&1
     script = script.replace("IMAGE_DIGEST", shlex.quote(f"{IMAGE}@{digest}"))
     script = script.replace("TARGET_IMAGE", shlex.quote(f"{IMAGE}:{tag}"))
     script = script.replace("=TAG", "=" + tag)
-    ssh(c, script)
+    ssh(c, script, reason=reason)
 
 
 
@@ -322,9 +339,9 @@ def request_ghcr(path, *, token=None, accept=None):
             token_url = m_realm.group(1)
             params = []
             if m_service:
-                params.append(f"service={urllib.request.quote(m_service.group(1))}")
+                params.append(f"service={urllib.parse.quote(m_service.group(1), safe="")}")
             if m_scope:
-                params.append(f"scope={urllib.request.quote(m_scope.group(1))}")
+                params.append(f"scope={urllib.parse.quote(m_scope.group(1), safe="")}")
             if params:
                 token_url += ("&" if "?" in token_url else "?") + "&".join(params)
             tok_req = urllib.request.Request(token_url, headers={"User-Agent": "workbuddy2api-hub-t007"})
@@ -354,9 +371,10 @@ def fetch_ghcr_manifest(reference):
     return manifest_obj, digest
 
 
-def verify_ghcr_image(c):
-    tag = c["NewTag"]
-    manifest_by_tag, computed_tag_digest = fetch_ghcr_manifest(tag)
+def verify_ghcr_reference(reference):
+    if not TAG_RE.fullmatch(reference):
+        raise ExternalGateError("GHCR_REFERENCE_INVALID", "Registry reference is not an exact release tag")
+    manifest_by_tag, computed_tag_digest = fetch_ghcr_manifest(reference)
     manifests = manifest_by_tag.get("manifests")
     if not isinstance(manifests, list) or not manifests:
         raise ExternalGateError("GHCR_INVALID_MANIFEST", "Registry response is not a multi-arch manifest list")
@@ -372,6 +390,10 @@ def verify_ghcr_image(c):
     if computed_frozen_digest != computed_tag_digest or manifest_by_digest != manifest_by_tag:
         raise ExternalGateError("GHCR_MUTABLE_TAG_DETECTED", "Registry tag changed during verification")
     return {"Success": True, "Digest": computed_tag_digest, "MultiArch": True}
+
+
+def verify_ghcr_image(c):
+    return verify_ghcr_reference(c["NewTag"])
 
 
 def execute(action, c):
@@ -392,13 +414,13 @@ def execute(action, c):
             raise RuntimeError("Remote tag identity changed")
         verify_assets(c, release)
         # Persist immutable review identity for the subsequent boundary process.
-        Path(c["Repo"], ".ai/runtime/draft-id").write_text(str(release["id"]), encoding="utf-8")
+        write_utf8_text(Path(c["Repo"], ".ai/runtime/draft-id"), str(release["id"]))
         return {"Success": True, "Draft": True, "AssetsVerified": True}
     if action == "RELEASE_PUBLISH":
         if not c.get("ResumeRelease") or c.get("ReviewedDraftTag") != c["NewTag"]:
             raise RuntimeError("STOP: Human draft review/publication required; rerun after review")
         release = view_release(c)
-        saved = Path(c["Repo"], ".ai/runtime/draft-id").read_text(encoding="utf-8")
+        saved = read_utf8_text(Path(c["Repo"], ".ai/runtime/draft-id"))
         if str(release["id"]) != saved or not release["isDraft"] or release["isPrerelease"]:
             raise RuntimeError("Draft changed")
         verify_assets(c, release)
@@ -408,9 +430,10 @@ def execute(action, c):
             raise RuntimeError("Release not published")
         return {"Success": True, "Published": True}
     if action == "GHCR_CAPABILITY_PREFLIGHT":
-        # Pre-publish capability check: verify GHCR is accessible before publishing release.
-        request_ghcr("tags/list?n=1")
-        return {"Success": True, "PreflightPassed": True}
+        # Exercise the complete read-only token/manifest/digest path against the currently published fork image.
+        current_tag = c.get("CurrentTag") or ""
+        result = verify_ghcr_reference(current_tag)
+        return {"Success": True, "PreflightPassed": True, "Digest": result["Digest"]}
     if action == "GHCR_VERIFY":
         wait_workflow(c, "docker-publish.yml", "release")
         published = view_release(c)
@@ -418,13 +441,14 @@ def execute(action, c):
             raise RuntimeError("Published release missing")
         return verify_ghcr_image(c)
     if action == "NAS_PREFLIGHT_AND_SNAPSHOT":
-        # Docker/compose capability check before snapshot:
-        ssh(c, "docker --version >/dev/null 2>&1 && docker compose version >/dev/null 2>&1\n")
-        previous = ssh(c, "sed -n 's/^WB_IMAGE_TAG=//p' .env\n").strip()
+        # Docker/compose capability check before snapshot. Classify this separately from generic SSH failures.
+        ssh(c, "docker --version >/dev/null 2>&1 && docker compose version >/dev/null 2>&1\n",
+            reason="REMOTE_DOCKER_CAPABILITY_FAILURE")
+        previous = ssh(c, "sed -n 's/^WB_IMAGE_TAG=//p' .env\n", reason="NAS_PREFLIGHT_FAILURE").strip()
         if not TAG_RE.fullmatch(previous):
             raise RuntimeError("Previous tag unresolved")
-        info = json.loads(ssh(c, "docker inspect wb-proxy\n"))[0]
-        image = json.loads(ssh(c, "docker image inspect " + shlex.quote(info["Image"]) + "\n"))[0]
+        info = json.loads(ssh(c, "docker inspect wb-proxy\n", reason="REMOTE_HEALTH_VERIFY_FAILURE"))[0]
+        image = json.loads(ssh(c, "docker image inspect " + shlex.quote(info["Image"]) + "\n", reason="REMOTE_HEALTH_VERIFY_FAILURE"))[0]
         digests = [d.split("@")[1] for d in image.get("RepoDigests", []) if d.startswith(IMAGE + "@")]
         if len(digests) != 1 or info["Config"]["Image"] != f"{IMAGE}:{previous}":
             raise RuntimeError("Previous image identity unresolved")
@@ -446,39 +470,63 @@ if ! (mkdir "$snapshot" && cp -p .env docker-compose.yml "$snapshot/" &&
 fi
 resume
 trap - 0 1 2 3 15
-""".replace("SNAPSHOT", shlex.quote(snapshot)))
+""".replace("SNAPSHOT", shlex.quote(snapshot)), reason="NAS_SNAPSHOT_FAILURE")
         await_health(c, digests[0])
         # Snapshot succeeded and the prior container was resumed; retain lock until final smoke/rollback.
         return {"Success": True, "PreviousTag": previous, "PreviousDigest": digests[0],
                 "SnapshotPath": c["NasDirectory"] + "/" + snapshot, "AccountsReady": baseline["AccountsReady"]}
     if action == "NAS_DEPLOY_TAG":
-        deploy(c, c["NewTag"], c["Digest"])
+        deploy(c, c["NewTag"], c["Digest"], reason="NAS_DEPLOY_FAILURE")
         return {"Success": True}
     if action == "NAS_VERIFY":
-        return {"Success": True, **await_health(c, c["Digest"])}
+        try:
+            return {"Success": True, **await_health(c, c["Digest"])}
+        except ExternalGateError:
+            raise
+        except Exception as e:
+            raise ExternalGateError("REMOTE_HEALTH_VERIFY_FAILURE", "Remote health verification failed") from e
     if action == "NAS_AUTHENTICATED_SMOKE":
-        smoke(c)
-        ssh(c, "rmdir .t007-update-lock\n")
-        return {"Success": True, "SmokePassed": True}
+        try:
+            smoke(c)
+            ssh(c, "rmdir .t007-update-lock\n", reason="AUTHENTICATED_SMOKE_FAILURE")
+            return {"Success": True, "SmokePassed": True}
+        except ExternalGateError:
+            raise
+        except Exception as e:
+            raise ExternalGateError("AUTHENTICATED_SMOKE_FAILURE", "Authenticated smoke failed") from e
     if action == "NAS_ROLLBACK":
-        deploy(c, c["PreviousTag"], c["PreviousDigest"])
-        status = await_health(c, c["PreviousDigest"])
-        smoke(c)
-        ssh(c, "rmdir .t007-update-lock\n")
-        return {"Success": True, "RestoredTag": c["PreviousTag"], "SmokePassed": True, **status}
+        try:
+            deploy(c, c["PreviousTag"], c["PreviousDigest"], reason="NAS_ROLLBACK_FAILURE")
+            status = await_health(c, c["PreviousDigest"])
+            smoke(c)
+            ssh(c, "rmdir .t007-update-lock\n", reason="NAS_ROLLBACK_FAILURE")
+            return {"Success": True, "RestoredTag": c["PreviousTag"], "SmokePassed": True, **status}
+        except ExternalGateError as e:
+            if e.reason == "NAS_ROLLBACK_FAILURE":
+                raise
+            raise ExternalGateError("NAS_ROLLBACK_FAILURE", "Rollback failed") from e
+        except Exception as e:
+            raise ExternalGateError("NAS_ROLLBACK_FAILURE", "Rollback failed") from e
     raise RuntimeError("Unknown external operation")
 
 
-if __name__ == "__main__":
+def cli_main(argv=None, stdin=None, stdout=None, stderr=None):
+    argv = sys.argv if argv is None else argv
+    stdin = sys.stdin if stdin is None else stdin
+    stdout = sys.stdout if stdout is None else stdout
     try:
-        print(json.dumps(execute(sys.argv[1], json.load(sys.stdin))))
+        result = execute(argv[1], json.load(stdin))
+        print(json.dumps(result), file=stdout)
+        return 0
     except ExternalGateError as e:
-        # Bounded reason classification without echoing sensitive outputs or tracebacks.
         print(json.dumps({"Success": False, "Reason": e.reason,
-                          "Error": "External gate failed; inspect operator tools securely"}))
-        sys.exit(1)
+                          "Error": "External gate failed; inspect operator tools securely"}), file=stdout)
+        return 1
     except Exception:
-        # Never print credentials, settings or a potentially secret-bearing subprocess exception.
         print(json.dumps({"Success": False, "Reason": "UNCLASSIFIED_ERROR",
-                          "Error": "External gate failed; inspect operator tools securely"}))
-        sys.exit(1)
+                          "Error": "External gate failed; inspect operator tools securely"}), file=stdout)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(cli_main())

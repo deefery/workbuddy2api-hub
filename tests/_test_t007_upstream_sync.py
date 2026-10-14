@@ -1,6 +1,8 @@
 """Production-path T-007 regressions using isolated Git repos and injected boundaries."""
 import importlib.util
 import json
+import hashlib
+import urllib.error
 import os
 import shutil
 import subprocess
@@ -480,6 +482,7 @@ class LiveBoundaryTests(unittest.TestCase):
     def context(self):
         return {"Repo": str(ROOT), "NewTag": "v1.7.2.2", "Sha": "c"*40, "UpstreamSha": "d"*40,
                 "OldMain": "e"*40, "OldCustom": "f"*40, "SourceRepo": str(ROOT), "AuthorizeRelease": True,
+                "CurrentTag": "v1.7.2.1",
                 "AuthorizeNas": True, "StateCompatibilitySha": "d"*40}
 
     def test_live_unknown_action_fails_closed(self):
@@ -561,7 +564,7 @@ class LiveBoundaryTests(unittest.TestCase):
         c = self.context(); c["NasDirectory"] = "/fixture"
         inspect = [{"Image": "img-id", "Config": {"Image": OPS.IMAGE + ":v1.7.2.9"}}]
         image = [{"RepoDigests": [OPS.IMAGE + "@" + PREVIOUS]}]
-        def ssh(ctx, script):
+        def ssh(ctx, script, **kwargs):
             if "docker --version" in script: return ""
             if script.startswith("sed"): return "v1.7.2.9\n"
             if script.startswith("docker inspect"): return json.dumps(inspect)
@@ -583,7 +586,7 @@ class LiveBoundaryTests(unittest.TestCase):
         c.update(PreviousTag="v1.7.2.9", PreviousDigest=PREVIOUS)
         with patch.object(OPS, "deploy") as deploy, patch.object(OPS, "await_health", return_value={"Healthy": True, "NetworkOk": True, "AccountsReady": 3, "Digest": PREVIOUS}), patch.object(OPS, "smoke") as smoke, patch.object(OPS, "ssh"):
             r = OPS.execute("NAS_ROLLBACK", c)
-            deploy.assert_called_once_with(c, "v1.7.2.9", PREVIOUS)
+            deploy.assert_called_once_with(c, "v1.7.2.9", PREVIOUS, reason="NAS_ROLLBACK_FAILURE")
             smoke.assert_called_once_with(c)
             self.assertEqual(r["RestoredTag"], "v1.7.2.9")
 
@@ -623,7 +626,7 @@ class LiveBoundaryTests(unittest.TestCase):
                 if kind == "revision": m["Config"]["Labels"]["org.opencontainers.image.revision"] = "wrong"
                 if kind == "accounts": ready["AccountsReady"] = 2
                 if kind == "auth": ready["KeyRequired"] = False
-                def ssh(ctx, script):
+                def ssh(ctx, script, **kwargs):
                     if script.startswith("docker inspect"): return json.dumps([i])
                     if script.startswith("docker image"): return json.dumps([m])
                     return json.dumps(ready)
@@ -681,7 +684,7 @@ class LiveBoundaryTests(unittest.TestCase):
         with patch("subprocess.run", side_effect=fake_run):
             with self.assertRaises(OPS.ExternalGateError) as cm:
                 OPS.ssh(c, "docker inspect wb-proxy\n")
-            self.assertEqual(cm.exception.reason, "REMOTE_DOCKER_NOT_FOUND")
+            self.assertEqual(cm.exception.reason, "SSH_SESSION_FAILURE")
 
     def test_docker_free_ghcr_verification(self):
         c = self.context()
@@ -727,31 +730,70 @@ class LiveBoundaryTests(unittest.TestCase):
 
     def test_pre_publish_ordering_and_capability_gate(self):
         c = self.context()
-        # Verify GHCR_CAPABILITY_PREFLIGHT calls request_ghcr
-        with patch.object(OPS, "request_ghcr", return_value=(200, {}, b'{"tags":["v1.7.4.1"]}')):
+        multi_manifest = {"schemaVersion": 2, "mediaType": OPS.OCI_INDEX_MEDIA, "manifests": [
+            {"platform": {"os": "linux", "architecture": "amd64"}},
+            {"platform": {"os": "linux", "architecture": "arm64"}},
+        ]}
+        body = json.dumps(multi_manifest, separators=(",", ":")).encode("utf-8")
+        digest = "sha256:" + hashlib.sha256(body).hexdigest()
+        with patch.object(OPS, "request_ghcr", side_effect=[(200, {}, body), (200, {}, body)]) as req:
             res = OPS.execute("GHCR_CAPABILITY_PREFLIGHT", c)
-            self.assertTrue(res["Success"])
-            self.assertTrue(res["PreflightPassed"])
+        self.assertTrue(res["Success"])
+        self.assertTrue(res["PreflightPassed"])
+        self.assertEqual(res["Digest"], digest)
+        self.assertEqual(req.call_args_list[0].args[0], "manifests/" + c["CurrentTag"])
+        self.assertEqual(req.call_args_list[1].args[0], "manifests/" + digest)
 
-        # When request_ghcr fails, GHCR_CAPABILITY_PREFLIGHT throws ExternalGateError
-        with patch.object(OPS, "request_ghcr", side_effect=OPS.ExternalGateError("GHCR_UNAUTHORIZED")):
+        with patch.object(OPS, "fetch_ghcr_manifest", side_effect=OPS.ExternalGateError("GHCR_MALFORMED_MANIFEST")):
             with self.assertRaises(OPS.ExternalGateError) as cm:
                 OPS.execute("GHCR_CAPABILITY_PREFLIGHT", c)
-            self.assertEqual(cm.exception.reason, "GHCR_UNAUTHORIZED")
+            self.assertEqual(cm.exception.reason, "GHCR_MALFORMED_MANIFEST")
 
-    def test_secret_safety_on_classification(self):
-        # Ensure external gate failure outputs structured reason without echo of sensitive tokens
-        secret_canary = "ghp_VerySecretAccessToken12345"
-        err = OPS.ExternalGateError("GHCR_TOKEN_FAILURE", f"Failed with {secret_canary}")
-        self.assertEqual(err.reason, "GHCR_TOKEN_FAILURE")
-        # In subprocess execution via __main__, only reason is emitted
-        proc = subprocess.run(
-            [sys.executable, "-c",
-             "import json, sys; sys.path.insert(0, 'tools'); import upstream_ops; "
-             f"raise upstream_ops.ExternalGateError('GHCR_TOKEN_FAILURE', '{secret_canary}')"],
-            capture_output=True, text=True
-        )
-        self.assertNotIn(secret_canary, proc.stdout)
+    def test_request_ghcr_bearer_challenge_success_and_failure(self):
+        class Resp:
+            def __init__(self, body, status=200, headers=None):
+                self._body=body; self.status=status; self.headers=headers or {}
+            def read(self): return self._body
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        challenge = urllib.error.HTTPError(
+            OPS.GHCR_REGISTRY_BASE + "/manifests/v1.7.2.1", 401, "unauthorized",
+            {"WWW-Authenticate": 'Bearer realm="https://ghcr.io/token",service="ghcr.io",scope="repository:deefery/workbuddy2api-hub:pull"'}, None)
+        with patch("urllib.request.urlopen", side_effect=[challenge, Resp(b'{"token":"TOKEN_CANARY"}'), Resp(b'{}')]) as opened:
+            status, _headers, body = OPS.request_ghcr("manifests/v1.7.2.1", accept=OPS.ACCEPT_MANIFEST_HEADER)
+            self.assertEqual(status, 200)
+            self.assertEqual(body, b'{}')
+            self.assertTrue(opened.call_args_list[2].args[0].headers.get("Authorization", "").startswith("Bearer "))
+        challenge2 = urllib.error.HTTPError(
+            OPS.GHCR_REGISTRY_BASE + "/manifests/v1.7.2.1", 401, "unauthorized",
+            {"WWW-Authenticate": 'Bearer realm="https://ghcr.io/token",service="ghcr.io",scope="repository:deefery/workbuddy2api-hub:pull"'}, None)
+        with patch("urllib.request.urlopen", side_effect=[challenge2, Resp(b'{}')]):
+            with self.assertRaises(OPS.ExternalGateError) as cm:
+                OPS.request_ghcr("manifests/v1.7.2.1")
+            self.assertEqual(cm.exception.reason, "GHCR_TOKEN_FAILURE")
+
+    def test_semantic_nas_failure_classification(self):
+        c = self.context()
+        with patch.object(OPS, "ssh", side_effect=OPS.ExternalGateError("REMOTE_DOCKER_CAPABILITY_FAILURE")):
+            with self.assertRaises(OPS.ExternalGateError) as cm:
+                OPS.execute("NAS_PREFLIGHT_AND_SNAPSHOT", c)
+            self.assertEqual(cm.exception.reason, "REMOTE_DOCKER_CAPABILITY_FAILURE")
+        with patch.object(OPS, "deploy", side_effect=OPS.ExternalGateError("NAS_DEPLOY_FAILURE")):
+            with self.assertRaises(OPS.ExternalGateError) as cm:
+                OPS.execute("NAS_DEPLOY_TAG", dict(c, Digest=DIGEST))
+            self.assertEqual(cm.exception.reason, "NAS_DEPLOY_FAILURE")
+
+    def test_cli_secret_safety_and_bounded_reason(self):
+        import io
+        secret = "ghp_VerySecretAccessToken12345"
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(OPS, "execute", side_effect=OPS.ExternalGateError("GHCR_TOKEN_FAILURE", secret)):
+            rc = OPS.cli_main(["upstream_ops.py", "GHCR_CAPABILITY_PREFLIGHT"], io.StringIO("{}"), out, err)
+        self.assertEqual(rc, 1)
+        combined = out.getvalue() + err.getvalue()
+        self.assertNotIn(secret, combined)
+        self.assertIn("GHCR_TOKEN_FAILURE", out.getvalue())
+
 
 
 
