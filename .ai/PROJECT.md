@@ -158,3 +158,14 @@ Status: READY for Executor implementation on dedicated branch/worktree; producti
 - Use a dedicated `cloudflared` service/network boundary with no Docker socket, host networking, privileged mode, WARP/private-network route, or bastion behavior.
 - Cloudflare rate limiting is optional/conditional on the zone plan being able to scope the rule to this hostname. Do not create a zone-wide `/v1/*` rate rule that could throttle the existing `api.zhijic.com` service.
 - Contract: `.ai/tasks/T-009.md`; prepared worktree: `C:\_AI\projects\.webcodex-worktrees\workbuddy2api-hub-t009-tunnel`.
+
+### T-010 — Upstream v1.7.3 conflict resolution
+
+Status: READY for Executor-hard local integration/review; release/GHCR/NAS external effects remain a later separately authorized task.
+
+- Exact upstream target: `v1.7.3` / `c7dad8fe32316d47ce4f0ff260bb7ac7802b8a94`.
+- Prepared base `59ca4de86b26fb6ef69d6ea4d39a9f18b9b0a253` combines current `custom/main` project state with accepted T-007 Review 3 implementation.
+- Branch/worktree: `task/t010-upstream-v173` / `C:\_AI\projects\.webcodex-worktrees\workbuddy2api-hub-t010-v173`.
+- Git merge preflight reproduces semantic conflicts in `README.md`, `wb_proxy.py`, and `wrt/openwrt/workbuddy2api/Makefile`.
+- T-010 resolves and validates the integration candidate only. It does not push/tag/publish or touch NAS. A later release/cutover task will exercise T-007 against the accepted T-010 candidate.
+- Contract: `.ai/tasks/T-010.md`; handoff target: `.ai/handoffs/T-010.md`.
