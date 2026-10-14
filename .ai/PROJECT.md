@@ -171,7 +171,7 @@ Status: PASS — Review 1 accepted; exact v1.7.3 local integration candidate is 
 - Contract: `.ai/tasks/T-010.md`; handoff target: `.ai/handoffs/T-010.md`.
 ### T-011 — v1.7.3.1 release & NAS cutover
 
-Status: READY for local/preflight execution. External release staging and final publish/NAS cutover are two explicit Project Owner gates.
+Status: BLOCKED — SUPERSEDED.
 
 - Accepted source baseline: T-010 Review 1 closeout `609593639c2defd820e840ada3554097d0dd8be9`.
 - Expected release: `v1.7.3.1`; exact upstream compatibility SHA `c7dad8fe32316d47ce4f0ff260bb7ac7802b8a94`.
