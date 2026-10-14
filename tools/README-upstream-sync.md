@@ -9,11 +9,11 @@ Double-click Check-Upstream.cmd for inspection with fetch, or run:
     .\Check-Upstream.cmd -NoFetch
     .\Update-From-Upstream.cmd -DryRun -NoFetch
 
-Check may fetch refs; it never pushes, tags, publishes or accesses NAS. -NoFetch uses the existing local refs. Dry-run is a plan: it does not integrate or run tests and never calls external gates. Version lookup fails on missing/ambiguous/malformed/disagreeing source identities or backwards progression.
+Check may fetch refs; it never pushes, tags, publishes or accesses NAS. -NoFetch uses the existing local refs. Dry-run is a plan: it does not integrate or run tests and never calls external gates. Version lookup fails on missing/ambiguous/malformed/disagreeing source identities or backwards progression. Any origin/main commits outside upstream/main (ahead-only or two-sided drift) stop both entrypoints; only behind-only drift is a normal update.
 
 Actual staging requires a clean operator checkout, both remotes, and non-divergent main/custom branches. An isolated codex/sync-upstream-* branch/worktree is created under .ai/runtime/integration-*. Upstream is actually merged there before release identity or tests. Failed/conflicted worktrees are retained; no reset, clean, stash or deletion is used.
 
-Release identity is X.Y.Z.N in both wb_proxy.py strings and wrt/openwrt/workbuddy2api/Makefile. Compose stays parameterized. Focused release engineering and tests/run_all.py both run; nonzero results or skipped full-suite files/zero executed suites stop before tag/push. There is no known-baseline-failure exception.
+Release identity is X.Y.Z.N in both wb_proxy.py strings, wrt/openwrt/workbuddy2api/Makefile and the maintained fork README Release badge (URL and alt text). All three files are committed together. Missing, ambiguous or disagreeing badge shape stops preparation before identity writes. Compose stays parameterized. Focused release engineering and tests/run_all.py both run; nonzero results or skipped full-suite files/zero executed suites stop before tag/push. There is no known-baseline-failure exception.
 
 High-risk storage/settings/usage, deployment, packaging or workflow deltas stop unless -ReviewedUpstreamSha matches the exact current upstream SHA after independent review. -Force is retained for old callers but grants no bypass. Unknown data compatibility always blocks NAS deployment, even after risk review.
 
@@ -28,6 +28,20 @@ Review the generated draft and its assets. After explicit publication authorizat
     .\Update-From-Upstream.cmd -ResumeReleaseEvidence "<original audit JSON>" -ReviewedDraftTag vX.Y.Z.N -AuthorizeRelease -SkipNasDeploy
 
 Continuation checks the saved integration SHA, tag, source equality, remote main/custom identities, clean integration workspace and T-008; it reruns focused/full tests. It skips push and verifies the same draft again before publishing the existing draft. GHCR verification requires published release, exact-SHA docker workflow, linux/amd64 + linux/arm64, and an immutable index digest. Invalid/changed/missing outputs stop. Credentials use existing gh/Docker/SSH stores; no login secrets go in reports.
+
+## Git push and release-stage recovery
+
+Before push the updater writes an ignored audit containing the exact prepared integration SHA/tag, worktree, original main/custom refs and upstream SHA. Keep that audit and worktree even if push fails or the process disconnects. A fresh normal update may create a different integration commit; use the saved continuation instead of deleting a tag or guessing a replacement SHA.
+
+With Project Owner authorization, retry the exact saved push/draft-verification stop:
+
+    .\Update-From-Upstream.cmd -ResumeReleaseEvidence "<push intent or stopped audit JSON>" -AuthorizeRelease -SkipNasDeploy
+
+The continuation checks the clean saved integration and reruns focused/full tests. The live push boundary reads origin directly, requiring the same fetch/push URL and the expected fork. It accepts only original remote main/custom refs (tag absent or exact saved SHA), or all three refs already at the exact intended push. A same-SHA local tag is reused; differing local/remote tags or partial/unexpected remote ref advancement stop without overwriting/deleting identity. The atomic push uses exact expected original branch heads and is read back after completion, including when a response was lost.
+
+If remote refs were verified but local bookkeeping failed, git_push_status is REMOTE_VERIFIED_LOCAL_PENDING and no release gate follows. The same continuation verifies remote refs again, avoids another push when already complete, and idempotently finishes local main/clean operator custom/main bookkeeping. It then verifies the CI-generated draft and returns DRAFT_READY_AWAITING_REVIEW; publication still requires the existing explicit draft-review continuation. A checked-out local main, changed local refs or dirty custom/main requires manual reconciliation after inspecting the exact saved/remote refs; never reset a checkout or delete/rewrite a tag blindly. If manual Git reconciliation is necessary, obtain the appropriate authorization, preserve local changes and advance only the exact verified refs. Retry that same saved continuation after reconciliation.
+
+If release CI/assets fail, retain the original audit and stop; retry from its DRAFT_RELEASE_VERIFY boundary only after the cause is resolved. Unknown/mismatched refs require independent review. A published Release/GHCR failure remains a manual operational stop: inspect exact tag/SHA/workflow before any new authorized action, rather than assuming publication did not happen.
 
 ## Separately authorized NAS deployment
 

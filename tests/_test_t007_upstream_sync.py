@@ -52,6 +52,8 @@ class PipelineTests(unittest.TestCase):
         git(self.repo, "checkout", "-b", "custom/main")
         (self.repo / "wb_proxy.py").write_text('server_version = "wb-proxy/1.7.2.1"\nmeta = {"version": "1.7.2.1"}\n')
         recipe.write_text("PKG_VERSION:=1.7.2.1\nPKG_RELEASE:=1\n")
+        badge = next(line.strip() for line in (ROOT / "README.md").read_text(encoding="utf-8-sig").splitlines() if "Release-v" in line)
+        (self.repo / "README.md").write_text(badge + "\n")
         shutil.copytree(ROOT / "tools", self.repo / "tools", ignore=shutil.ignore_patterns("__pycache__"))
         for file in ("Check-Upstream.cmd", "Update-From-Upstream.cmd"):
             shutil.copy2(ROOT / file, self.repo / file)
@@ -346,6 +348,121 @@ $mock = {
         self.assertEqual(self.actions(), [])
         self.assertEqual(self.evidence()["last_gate"], "RESUME_RELEASE")
 
+
+    def test_ahead_only_main_stops_check_and_update_before_effects(self):
+        git(self.repo, "checkout", "main")
+        (self.repo / "main-only.txt").write_text("unexpected fork commit")
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-m", "ahead-only drift")
+        drift = git(self.repo, "rev-parse", "HEAD")
+        git(self.repo, "checkout", "custom/main")
+        git(self.repo, "update-ref", "refs/remotes/origin/main", drift)
+        git(self.repo, "update-ref", "refs/remotes/upstream/main", self.base)
+        rc, out = self.ps(". ./tools/UpstreamSync.Common.ps1\n$d=Get-UpstreamDeltaSummary -Repo .\nif ($d.AheadCount -ne 1 -or $d.BehindCount -ne 0 -or $d.HasUpdate -or -not $d.IsDivergent) {throw 'bad delta'}")
+        self.assertEqual(rc, 0, out)
+        self.assertNotEqual(self.wrapper("Check-Upstream.cmd", "-NoFetch")[0], 0)
+        self.assertEqual(self.evidence("check")["status"], "DIVERGENT_STOP")
+        self.assertNotEqual(self.update()[0], 0)
+        e = self.evidence()
+        self.assertEqual(e["last_gate"], "DELTA")
+        self.assertNotIn("integration_path", e)
+        self.assertEqual(self.actions(), [])
+
+    def test_release_badge_is_bumped_and_committed_with_source(self):
+        rc, out = self.update()
+        self.assertEqual(rc, 0, out)
+        e = self.evidence()
+        repo = Path(e["integration_path"])
+        doc = git(repo, "show", "HEAD:README.md")
+        self.assertNotIn("1.7.2.1", doc)
+        self.assertIn("Release-v1.7.2.2", doc)
+        self.assertIn('alt="Version 1.7.2.2"', doc)
+        changed = set(git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").splitlines())
+        self.assertEqual(changed, {"README.md", "wb_proxy.py", "wrt/openwrt/workbuddy2api/Makefile"})
+        self.assertEqual(git(repo, "status", "--porcelain"), "")
+
+    def test_badge_new_upstream_base_updates_both_visible_identity_fields(self):
+        rc, out = self.ps(". ./tools/UpstreamSync.Common.ps1\nUpdate-ReleaseIdentityFiles -Repo . -NewVersion 1.7.3.1")
+        self.assertEqual(rc, 0, out)
+        doc = (self.repo / "README.md").read_text()
+        self.assertNotIn("1.7.2.1", doc)
+        self.assertIn("Release-v1.7.3.1", doc)
+        self.assertIn('alt="Version 1.7.3.1"', doc)
+
+    def test_badge_missing_ambiguous_or_disagreeing_stops_without_writes(self):
+        original = (self.repo / "README.md").read_text()
+        proxy = (self.repo / "wb_proxy.py").read_bytes()
+        recipe = (self.repo / "wrt/openwrt/workbuddy2api/Makefile").read_bytes()
+        for content in ["no badge\n", original * 2, original.replace('Version 1.7.2.1', 'Version 9.9.9.9')]:
+            with self.subTest(content=content):
+                (self.repo / "README.md").write_text(content)
+                rc, out = self.ps(". ./tools/UpstreamSync.Common.ps1\nUpdate-ReleaseIdentityFiles -Repo . -NewVersion 1.7.3.1")
+                self.assertNotEqual(rc, 0, out)
+                self.assertEqual((self.repo / "wb_proxy.py").read_bytes(), proxy)
+                self.assertEqual((self.repo / "wrt/openwrt/workbuddy2api/Makefile").read_bytes(), recipe)
+                self.assertEqual((self.repo / "README.md").read_text(), content)
+
+    def test_failed_push_audit_resumes_exact_existing_integration(self):
+        rc, out = self.update(failure="GIT_PUSH")
+        self.assertNotEqual(rc, 0, out)
+        e = self.evidence()
+        path = max(self.runtime.glob("sync-update-*.json"), key=lambda p: p.stat().st_mtime_ns)
+        self.assertEqual(e["old_main_sha"], self.base)
+        self.assertEqual(e["old_custom_sha"], self.custom)
+        # Simulate the live boundary's local tag that survived a rejected push.
+        git(self.repo, "tag", e["fork_tag"], e["integration_sha"])
+        rc, out = self.update(extra="-ResumeReleaseEvidence " + quote(path), review=False)
+        self.assertEqual(rc, 0, out)
+        resumed = self.evidence()
+        self.assertEqual(resumed["integration_sha"], e["integration_sha"])
+        self.assertEqual(resumed["integration_path"], e["integration_path"])
+        self.assertEqual(resumed["status"], "DRAFT_READY_AWAITING_REVIEW")
+
+    def test_remote_verified_local_pending_is_recorded_and_resumable(self):
+        rc, out = self.update(mutate="if ($Action -eq 'GIT_PUSH') { $r.Success=$false; $r.GitPushStatus='REMOTE_VERIFIED_LOCAL_PENDING' }")
+        self.assertNotEqual(rc, 0, out)
+        e = self.evidence()
+        path = max(self.runtime.glob("sync-update-*.json"), key=lambda p: p.stat().st_mtime_ns)
+        self.assertEqual(e["git_push_status"], "REMOTE_VERIFIED_LOCAL_PENDING")
+        self.assertEqual(self.actions(), ["GIT_PUSH"])
+        # Saved original refs survive even after tracking refs have advanced.
+        git(self.repo, "tag", e["fork_tag"], e["integration_sha"])
+        git(self.repo, "update-ref", "refs/remotes/origin/main", self.up)
+        git(self.repo, "update-ref", "refs/remotes/origin/custom/main", e["integration_sha"])
+        rc, out = self.update(extra="-ResumeReleaseEvidence " + quote(path), review=False)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.evidence()["status"], "DRAFT_READY_AWAITING_REVIEW")
+
+    def test_push_resume_rejects_missing_original_refs_or_moved_integration(self):
+        self.assertNotEqual(self.update(failure="GIT_PUSH")[0], 0)
+        e = self.evidence()
+        path = max(self.runtime.glob("sync-update-*.json"), key=lambda p: p.stat().st_mtime_ns)
+        original = json.loads(path.read_text())
+        invalid = dict(original)
+        invalid.pop("old_main_sha")
+        path.write_text(json.dumps(invalid))
+        self.trace.unlink()
+        self.assertNotEqual(self.update(extra="-ResumeReleaseEvidence "+quote(path))[0], 0)
+        self.assertEqual(self.actions(), [])
+        path.write_text(json.dumps(original))
+        integrated = Path(e["integration_path"])
+        (integrated / "changed-after-stop").write_text("unreviewed")
+        git(integrated, "add", ".")
+        git(integrated, "commit", "-m", "identity moved")
+        self.assertNotEqual(self.update(extra="-ResumeReleaseEvidence "+quote(path))[0], 0)
+        self.assertEqual(self.actions(), [])
+
+    def test_draft_verification_stop_reuses_verified_push_intent(self):
+        rc, out = self.update(failure="DRAFT_RELEASE_VERIFY")
+        self.assertNotEqual(rc, 0, out)
+        e = self.evidence()
+        path = max(self.runtime.glob("sync-update-*.json"), key=lambda p: p.stat().st_mtime_ns)
+        self.assertEqual(e["git_push_status"], "VERIFIED")
+        rc, out = self.update(extra="-ResumeReleaseEvidence "+quote(path), review=False)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.evidence()["status"], "DRAFT_READY_AWAITING_REVIEW")
+        self.assertEqual(self.evidence()["integration_sha"], e["integration_sha"])
+
     def test_version_progression_and_backwards_direction(self):
         rc, out = self.ps(". ./tools/UpstreamSync.Common.ps1\n(Derive-NextForkVersion '1.7.3' '1.7.2.8').ProposedForkVersion\n(Derive-NextForkVersion '1.7.2' '1.7.2.8').ProposedForkVersion\n")
         self.assertEqual(rc, 0, out)
@@ -365,9 +482,17 @@ class LiveBoundaryTests(unittest.TestCase):
 
     def test_push_executes_atomic_exact_refs(self):
         c = self.context()
+        pushed = False
         def fake_git(ctx, *args):
-            if args[:3] == ("remote", "get-url", "--push"): return "https://github.com/deefery/workbuddy2api-hub.git"
+            nonlocal pushed
+            if args[:2] == ("remote", "get-url"): return "https://github.com/deefery/workbuddy2api-hub.git"
             if args == ("rev-parse", "HEAD"): return c["Sha"]
+            if args == ("rev-parse", "refs/heads/main"): return c["OldMain"]
+            if args[0] == "push": pushed = True
+            if args[0] == "ls-remote":
+                if pushed:
+                    return f"{c['UpstreamSha']}\\trefs/heads/main\\n{c['Sha']}\\trefs/heads/custom/main\\n{c['Sha']}\\trefs/tags/{c['NewTag']}".replace("\\t", "\t").replace("\\n", "\n")
+                return f"{c['OldMain']}\\trefs/heads/main\\n{c['OldCustom']}\\trefs/heads/custom/main".replace("\\t", "\t").replace("\\n", "\n")
             return ""
         with patch.object(OPS, "git", side_effect=fake_git) as g:
             self.assertTrue(OPS.execute("GIT_PUSH", c)["Success"])
@@ -495,6 +620,155 @@ class LiveBoundaryTests(unittest.TestCase):
                     return json.dumps(ready)
                 with patch.object(OPS, "ssh", side_effect=ssh):
                     with self.assertRaises(RuntimeError): OPS.health(c, DIGEST)
+
+
+class PushRecoveryTests(unittest.TestCase):
+    """Actual Git and atomic pushes only to disposable on-disk remotes."""
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="t007-push-")
+        self.addCleanup(self.temp.cleanup)
+        self.source = Path(self.temp.name) / "source"
+        self.remote = Path(self.temp.name) / "remote.git"
+        self.integration = Path(self.temp.name) / "integration"
+        self.source.mkdir()
+        git(self.source, "init", "-b", "main")
+        git(self.source, "config", "user.name", "T007 fixture")
+        git(self.source, "config", "user.email", "fixture@example.invalid")
+        (self.source / "base").write_text("base")
+        git(self.source, "add", ".")
+        git(self.source, "commit", "-m", "base")
+        base = git(self.source, "rev-parse", "HEAD")
+        git(self.source, "checkout", "-b", "custom/main")
+        (self.source / "fork").write_text("fork")
+        git(self.source, "add", ".")
+        git(self.source, "commit", "-m", "fork")
+        custom = git(self.source, "rev-parse", "HEAD")
+        git(self.source, "checkout", "-b", "upstream-fixture", base)
+        (self.source / "upstream").write_text("upstream")
+        git(self.source, "add", ".")
+        git(self.source, "commit", "-m", "upstream")
+        upstream = git(self.source, "rev-parse", "HEAD")
+        git(self.source, "checkout", "custom/main")
+        git(self.source, "worktree", "add", "-b", "codex/sync-fixture", str(self.integration), custom)
+        git(self.integration, "merge", "--no-ff", "-m", "integrate", upstream)
+        sha = git(self.integration, "rev-parse", "HEAD")
+        git(self.source, "init", "--bare", str(self.remote))
+        git(self.source, "remote", "add", "origin", str(self.remote))
+        git(self.source, "push", "origin", "main", "custom/main")
+        self.c = {"Repo": str(self.integration), "SourceRepo": str(self.source),
+                  "NewTag": "v1.7.2.2", "Sha": sha, "UpstreamSha": upstream,
+                  "OldMain": base, "OldCustom": custom, "AuthorizeRelease": True}
+        self.real_ops_git = OPS.git
+
+    def local_boundary(self, c, *args):
+        # Only URL validation is injected; all ref reads, tags, pushes and
+        # bookkeeping use Git against the isolated on-disk fixture.
+        if args[:2] == ("remote", "get-url"):
+            return "https://github.com/deefery/workbuddy2api-hub.git"
+        return self.real_ops_git(c, *args)
+
+    def remote_ref(self, ref):
+        return git(self.remote, "rev-parse", ref)
+
+    def test_failed_push_same_sha_tag_retries_without_rewriting_identity(self):
+        def reject(c, *args):
+            if args[0] == "push":
+                raise RuntimeError("injected remote failure")
+            return self.local_boundary(c, *args)
+        with patch.object(OPS, "git", side_effect=reject):
+            with self.assertRaises(RuntimeError):
+                OPS.execute("GIT_PUSH", self.c)
+        self.assertEqual(git(self.integration, "rev-parse", "refs/tags/"+self.c["NewTag"]), self.c["Sha"])
+        self.assertEqual(self.remote_ref("refs/heads/main"), self.c["OldMain"])
+        with patch.object(OPS, "git", side_effect=self.local_boundary) as calls:
+            self.assertTrue(OPS.execute("GIT_PUSH", self.c)["Success"])
+            self.assertFalse(any(x.args[1:2] == ("tag",) and "--list" not in x.args for x in calls.call_args_list))
+            push = next(x.args for x in calls.call_args_list if x.args[1] == "push")
+            self.assertIn("--atomic", push)
+        self.assertEqual(self.remote_ref("refs/tags/"+self.c["NewTag"]), self.c["Sha"])
+
+    def test_remote_advanced_local_pending_recovers_without_another_push(self):
+        def fail_local(c, *args):
+            if args[:2] == ("update-ref", "refs/heads/main"):
+                raise RuntimeError("injected late bookkeeping failure")
+            return self.local_boundary(c, *args)
+        with patch.object(OPS, "git", side_effect=fail_local):
+            result = OPS.execute("GIT_PUSH", self.c)
+        self.assertEqual(result, {"Success": False, "GitPushStatus": "REMOTE_VERIFIED_LOCAL_PENDING"})
+        self.assertEqual(self.remote_ref("refs/heads/main"), self.c["UpstreamSha"])
+        self.assertEqual(self.remote_ref("refs/heads/custom/main"), self.c["Sha"])
+        self.assertEqual(git(self.source, "rev-parse", "main"), self.c["OldMain"])
+        with patch.object(OPS, "git", side_effect=self.local_boundary) as calls:
+            self.assertTrue(OPS.execute("GIT_PUSH", self.c)["Success"])
+            self.assertFalse(any(x.args[1] == "push" for x in calls.call_args_list))
+        self.assertEqual(git(self.source, "rev-parse", "main"), self.c["UpstreamSha"])
+        self.assertEqual(git(self.source, "rev-parse", "custom/main"), self.c["Sha"])
+        self.assertEqual(git(self.source, "status", "--porcelain"), "")
+        with patch.object(OPS, "git", side_effect=self.local_boundary):
+            self.assertTrue(OPS.execute("GIT_PUSH", self.c)["Success"])
+
+    def test_lost_push_response_is_reconciled_from_actual_remote_refs(self):
+        def lost(c, *args):
+            value = self.local_boundary(c, *args)
+            if args[0] == "push":
+                raise RuntimeError("push response lost")
+            return value
+        with patch.object(OPS, "git", side_effect=lost):
+            self.assertTrue(OPS.execute("GIT_PUSH", self.c)["Success"])
+        self.assertEqual(self.remote_ref("refs/tags/"+self.c["NewTag"]), self.c["Sha"])
+
+    def test_mismatched_local_tag_is_never_deleted_or_pushed(self):
+        git(self.integration, "tag", self.c["NewTag"], self.c["OldMain"])
+        with patch.object(OPS, "git", side_effect=self.local_boundary) as calls:
+            with self.assertRaises(RuntimeError):
+                OPS.execute("GIT_PUSH", self.c)
+            self.assertFalse(any(x.args[1] == "push" for x in calls.call_args_list))
+        self.assertEqual(git(self.integration, "rev-parse", "refs/tags/"+self.c["NewTag"]), self.c["OldMain"])
+
+    def test_mismatched_remote_tag_or_partial_refs_stop_before_mutation(self):
+        tag = "refs/tags/"+self.c["NewTag"]
+        git(self.remote, "update-ref", tag, self.c["OldMain"])
+        with patch.object(OPS, "git", side_effect=self.local_boundary) as calls:
+            with self.assertRaises(RuntimeError):
+                OPS.execute("GIT_PUSH", self.c)
+            self.assertFalse(any(x.args[1] in {"push", "tag"} for x in calls.call_args_list))
+        self.assertEqual(self.remote_ref(tag), self.c["OldMain"])
+        # A different fixture state with only one branch advanced is not an atomic success.
+        git(self.remote, "update-ref", "-d", tag)
+        git(self.source, "push", "origin", self.c["UpstreamSha"]+":refs/heads/main")
+        with patch.object(OPS, "git", side_effect=self.local_boundary) as calls:
+            with self.assertRaises(RuntimeError):
+                OPS.execute("GIT_PUSH", self.c)
+            self.assertFalse(any(x.args[1] in {"push", "tag"} for x in calls.call_args_list))
+
+    def test_fetch_push_destination_difference_fails_before_any_ref_mutation(self):
+        def different(c, *args):
+            if args == ("remote", "get-url", "origin"):
+                return "https://github.com/unexpected/other.git"
+            return self.local_boundary(c, *args)
+        with patch.object(OPS, "git", side_effect=different) as calls:
+            with self.assertRaises(RuntimeError):
+                OPS.execute("GIT_PUSH", self.c)
+            self.assertFalse(any(x.args[1] in {"tag", "push", "update-ref"} for x in calls.call_args_list))
+
+    def test_local_ref_mismatch_after_verified_push_requires_manual_recovery(self):
+        with patch.object(OPS, "git", side_effect=self.local_boundary):
+            self.assertTrue(OPS.execute("GIT_PUSH", self.c)["Success"])
+        git(self.source, "update-ref", "refs/heads/main", self.c["OldCustom"])
+        with patch.object(OPS, "git", side_effect=self.local_boundary) as calls:
+            result = OPS.execute("GIT_PUSH", self.c)
+            self.assertEqual(result["GitPushStatus"], "REMOTE_VERIFIED_LOCAL_PENDING")
+            self.assertFalse(any(x.args[1] == "push" for x in calls.call_args_list))
+        self.assertEqual(git(self.source, "rev-parse", "main"), self.c["OldCustom"])
+
+    def test_same_sha_remote_tag_allows_original_refs_retry(self):
+        git(self.integration, "tag", self.c["NewTag"], self.c["Sha"])
+        git(self.integration, "push", "origin", self.c["NewTag"])
+        with patch.object(OPS, "git", side_effect=self.local_boundary) as calls:
+            self.assertTrue(OPS.execute("GIT_PUSH", self.c)["Success"])
+            push = next(x.args for x in calls.call_args_list if x.args[1] == "push")
+            self.assertFalse(any("refs/tags/" in arg for arg in push[1:]))
+
 
 if __name__ == "__main__":
     unittest.main()

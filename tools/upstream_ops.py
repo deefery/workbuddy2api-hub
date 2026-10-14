@@ -180,6 +180,88 @@ docker compose up -d --no-deps --pull never wb-proxy >/dev/null 2>&1
     ssh(c, script)
 
 
+
+def remote_push_state(c):
+    """Read the push destination itself; tracking refs alone are not evidence."""
+    refs = ["refs/heads/main", "refs/heads/custom/main", "refs/tags/" + c["NewTag"]]
+    lines = git(c, "ls-remote", "origin", *refs).splitlines()
+    found = {}
+    for line in lines:
+        parts = line.split()
+        if len(parts) != 2 or not re.fullmatch(r"[a-f0-9]{40}", parts[0]) or parts[1] not in refs or parts[1] in found:
+            raise RuntimeError("Invalid remote ref evidence")
+        found[parts[1]] = parts[0]
+    tag = found.get(refs[2])
+    if tag is not None and tag != c["Sha"]:
+        raise RuntimeError("Remote tag identity mismatch")
+    if found.get(refs[0]) == c["UpstreamSha"] and found.get(refs[1]) == c["Sha"] and tag == c["Sha"]:
+        return "ADVANCED", tag
+    if found.get(refs[0]) == c["OldMain"] and found.get(refs[1]) == c["OldCustom"]:
+        return "ORIGINAL", tag
+    raise RuntimeError("Remote refs differ from original or exact reviewed push")
+
+
+def reconcile_local_push(c):
+    """Idempotent CAS/fast-forward bookkeeping; never reset an occupied checkout."""
+    current = git(c, "rev-parse", "refs/heads/main")
+    if current not in {c["OldMain"], c["UpstreamSha"]}:
+        raise RuntimeError("Local main identity moved")
+    if current != c["UpstreamSha"]:
+        if "branch refs/heads/main" in git(c, "worktree", "list", "--porcelain"):
+            raise RuntimeError("Local main is checked out; manual reconciliation required")
+        git(c, "update-ref", "refs/heads/main", c["UpstreamSha"], current)
+    source = dict(c, Repo=c["SourceRepo"])
+    if git(source, "branch", "--show-current") == "custom/main":
+        current = git(source, "rev-parse", "HEAD")
+        if current not in {c["OldCustom"], c["Sha"]} or git(source, "status", "--porcelain"):
+            raise RuntimeError("Operator checkout changed; reconcile manually")
+        if current != c["Sha"]:
+            git(source, "merge", "--ff-only", c["Sha"])
+    # Refresh only the verified identities, including on recovery with -NoFetch.
+    git(c, "update-ref", "refs/remotes/origin/main", c["UpstreamSha"])
+    git(c, "update-ref", "refs/remotes/origin/custom/main", c["Sha"])
+
+
+def push_reviewed_refs(c):
+    url = git(c, "remote", "get-url", "--push", "origin")
+    if url not in {f"https://github.com/{GITHUB_REPO}.git", f"git@github.com:{GITHUB_REPO}.git"}:
+        raise RuntimeError("Unexpected release remote")
+    # ls-remote must inspect the same URL that receives the push.
+    if git(c, "remote", "get-url", "origin") != url:
+        raise RuntimeError("Different fetch/push remotes require manual reconciliation")
+    if git(c, "rev-parse", "HEAD") != c["Sha"]:
+        raise RuntimeError("Integration SHA changed")
+    git(c, "merge-base", "--is-ancestor", c["OldCustom"], c["Sha"])
+    git(c, "merge-base", "--is-ancestor", c["OldMain"], c["UpstreamSha"])
+    state, remote_tag = remote_push_state(c)
+    local_tag = git(c, "tag", "--list", c["NewTag"])
+    if local_tag:
+        if local_tag != c["NewTag"] or git(c, "rev-parse", "refs/tags/" + c["NewTag"]) != c["Sha"]:
+            raise RuntimeError("Local tag identity mismatch")
+    else:
+        git(c, "tag", c["NewTag"], c["Sha"])
+    if state == "ORIGINAL":
+        if "branch refs/heads/main" in git(c, "worktree", "list", "--porcelain"):
+            raise RuntimeError("main is checked out; cannot advance its ref safely")
+        refspecs = [f"{c['UpstreamSha']}:refs/heads/main", f"{c['Sha']}:refs/heads/custom/main"]
+        if remote_tag is None:
+            refspecs.append(f"refs/tags/{c['NewTag']}:refs/tags/{c['NewTag']}")
+        try:
+            git(c, "push", "--atomic", f"--force-with-lease=refs/heads/main:{c['OldMain']}",
+                f"--force-with-lease=refs/heads/custom/main:{c['OldCustom']}", "origin", *refspecs)
+        except RuntimeError:
+            # A lost response may follow a successful atomic push. Inspect, never guess.
+            if remote_push_state(c)[0] != "ADVANCED":
+                raise
+        if remote_push_state(c)[0] != "ADVANCED":
+            raise RuntimeError("Remote push identities not verified")
+    try:
+        reconcile_local_push(c)
+    except RuntimeError:
+        return {"Success": False, "GitPushStatus": "REMOTE_VERIFIED_LOCAL_PENDING"}
+    return {"Success": True, "GitPushStatus": "VERIFIED"}
+
+
 def execute(action, c):
     if not TAG_RE.fullmatch(c["NewTag"]):
         raise RuntimeError("Invalid tag")
@@ -188,29 +270,7 @@ def execute(action, c):
     if action.startswith("NAS_") and (not c.get("AuthorizeNas") or c.get("StateCompatibilitySha") != c["UpstreamSha"]):
         raise RuntimeError("NAS/state authorization missing")
     if action == "GIT_PUSH":
-        url = git(c, "remote", "get-url", "--push", "origin")
-        if url not in {f"https://github.com/{GITHUB_REPO}.git", f"git@github.com:{GITHUB_REPO}.git"}:
-            raise RuntimeError("Unexpected release remote")
-        if git(c, "rev-parse", "HEAD") != c["Sha"]:
-            raise RuntimeError("Integration SHA changed")
-        git(c, "merge-base", "--is-ancestor", c["OldCustom"], c["Sha"])
-        git(c, "merge-base", "--is-ancestor", c["OldMain"], c["UpstreamSha"])
-        occupied = git(c, "worktree", "list", "--porcelain")
-        if "branch refs/heads/main" in occupied:
-            raise RuntimeError("main is checked out; cannot advance its ref safely")
-        git(c, "tag", c["NewTag"], c["Sha"])
-        # Non-forced, atomic, exact expected remote heads; neither branch can drift.
-        git(c, "push", "--atomic", f"--force-with-lease=refs/heads/main:{c['OldMain']}",
-            f"--force-with-lease=refs/heads/custom/main:{c['OldCustom']}", "origin",
-            f"{c['UpstreamSha']}:refs/heads/main", f"{c['Sha']}:refs/heads/custom/main",
-            f"refs/tags/{c['NewTag']}:refs/tags/{c['NewTag']}")
-        git(c, "update-ref", "refs/heads/main", c["UpstreamSha"], c["OldMain"])
-        source = dict(c, Repo=c["SourceRepo"])
-        if git(source, "branch", "--show-current") == "custom/main":
-            if git(source, "status", "--porcelain") or git(source, "rev-parse", "HEAD") != c["OldCustom"]:
-                raise RuntimeError("Operator checkout changed; reconcile local branch manually")
-            git(source, "merge", "--ff-only", c["Sha"])
-        return {"Success": True}
+        return push_reviewed_refs(c)
     if action == "DRAFT_RELEASE_VERIFY":
         wait_workflow(c, "release.yml", "push")
         release = view_release(c)

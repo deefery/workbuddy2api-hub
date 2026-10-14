@@ -17,6 +17,7 @@ try {
     $e.last_gate = 'DELTA'
     $d = Get-UpstreamDeltaSummary -Repo $RepoPath
     $e.old_upstream_sha = $d.ForkBaseSha; $e.new_upstream_sha = $d.UpstreamSha; $e.has_update = $d.HasUpdate
+    if ($d.IsDivergent) { $e.status = 'DIVERGENT_STOP'; throw 'STOP: origin/main contains commits outside upstream/main' }
     $e.last_gate = 'VERSION'
     $current = Read-ExactVersion -Content (Assert-SyncGit -Repo $RepoPath -Arguments @('show', 'custom/main:wb_proxy.py'))
     $up = Get-UpstreamStableVersion -Repo $RepoPath

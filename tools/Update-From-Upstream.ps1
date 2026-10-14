@@ -37,17 +37,26 @@ try {
             $saved.fork_tag -notmatch '^v\d+\.\d+\.\d+\.\d+$' -or
             $saved.integration_sha -notmatch '^[a-f0-9]{40}$' -or
             $saved.new_upstream_sha -notmatch '^[a-f0-9]{40}$' -or
-            ($saved.status -ne 'DRAFT_READY_AWAITING_REVIEW' -and $saved.last_gate -ne 'RELEASE_PUBLISH')) {
+            ($saved.status -ne 'DRAFT_READY_AWAITING_REVIEW' -and $saved.last_gate -notin @('GIT_PUSH','DRAFT_RELEASE_VERIFY','RELEASE_PUBLISH'))) {
             throw 'STOP: Invalid release continuation evidence'
         }
         if (-not (Get-SyncGitContext -Repo $repo).IsClean) { throw 'STOP: Continuation worktree dirty' }
-        if ((Assert-SyncGit -Repo $repo -Arguments @('rev-parse','HEAD')) -ne $saved.integration_sha -or
-            (Assert-SyncGit -Repo $RepoPath -Arguments @('rev-parse',"refs/tags/$($saved.fork_tag)")) -ne $saved.integration_sha -or
+        $retryPush = $saved.last_gate -in @('GIT_PUSH','DRAFT_RELEASE_VERIFY') -and $saved.status -ne 'DRAFT_READY_AWAITING_REVIEW'
+        if ((Assert-SyncGit -Repo $repo -Arguments @('rev-parse','HEAD')) -ne $saved.integration_sha) {
+            throw 'STOP: Integration continuation identity moved'
+        }
+        if ($retryPush) {
+            if ($saved.old_main_sha -notmatch '^[a-f0-9]{40}$' -or $saved.old_custom_sha -notmatch '^[a-f0-9]{40}$') {
+                throw 'STOP: Push continuation lacks original exact refs'
+            }
+            # The push boundary reads the actual destination and permits only original
+            # refs or the exact completed atomic push. Do not infer from tracking refs.
+        } elseif ((Assert-SyncGit -Repo $RepoPath -Arguments @('rev-parse',"refs/tags/$($saved.fork_tag)")) -ne $saved.integration_sha -or
             (Assert-SyncGit -Repo $RepoPath -Arguments @('rev-parse','origin/custom/main')) -ne $saved.integration_sha -or
             (Assert-SyncGit -Repo $RepoPath -Arguments @('rev-parse','origin/main')) -ne $saved.new_upstream_sha) {
             throw 'STOP: Release continuation identity moved'
         }
-        foreach ($key in @('old_upstream_sha','new_upstream_sha','fork_version','fork_tag','integration_path','integration_branch','integration_sha')) {
+        foreach ($key in @('old_upstream_sha','new_upstream_sha','fork_version','fork_tag','integration_path','integration_branch','integration_sha','old_main_sha','old_custom_sha')) {
             $e[$key] = $saved.$key
         }
         if ((Get-SourceReleaseVersion -Repo $repo) -ne $saved.fork_version -or -not (Test-T008DualNetworkConfig -Repo $repo).IsValid) {
@@ -56,7 +65,8 @@ try {
         $e.last_gate = 'TESTS'
         if (-not (Invoke-FullTestSuiteGate -Repo $repo -PythonExe $PythonExe -Evidence $e).Success) { throw 'STOP: Continued full tests failed' }
         $context = @{
-            Repo = $repo; SourceRepo = $RepoPath; ResumeRelease = $true; Sha = $saved.integration_sha
+            Repo = $repo; SourceRepo = $RepoPath; ResumeRelease = (-not $retryPush); Sha = $saved.integration_sha
+            OldMain = $saved.old_main_sha; OldCustom = $saved.old_custom_sha
             UpstreamSha = $saved.new_upstream_sha; NewTag = $saved.fork_tag
             AuthorizeRelease = [bool]$AuthorizeRelease; AuthorizeNas = [bool]$AuthorizeNas
             ReviewedDraftTag = $ReviewedDraftTag; StateCompatibilitySha = $StateCompatibilitySha
@@ -101,10 +111,11 @@ try {
     $e.last_gate = 'TESTS'
     $test = Invoke-FullTestSuiteGate -Repo $repo -PythonExe $PythonExe -Evidence $e
     if (-not $test.Success) { throw 'STOP: Focused/full suite failed or skipped tests; no release mutation' }
-    Assert-SyncGit -Repo $repo -Arguments @('add', 'wb_proxy.py', 'wrt/openwrt/workbuddy2api/Makefile') | Out-Null
+    Assert-SyncGit -Repo $repo -Arguments @('add', 'wb_proxy.py', 'wrt/openwrt/workbuddy2api/Makefile', 'README.md') | Out-Null
     Assert-SyncGit -Repo $repo -Arguments @('commit', '-m', "Prepare fork $($e.fork_tag)") | Out-Null
     $sha = Assert-SyncGit -Repo $repo -Arguments @('rev-parse', 'HEAD')
     $e.integration_sha = $sha
+    $e.old_main_sha = $integration.OldMain; $e.old_custom_sha = $integration.OldCustom
     $context = @{
         Repo = $repo; SourceRepo = $RepoPath; ResumeRelease = $false; SyncBranch = $integration.SyncBranch; Sha = $sha; UpstreamSha = $d.UpstreamSha
         OldMain = $integration.OldMain; OldCustom = $integration.OldCustom; NewTag = $e.fork_tag

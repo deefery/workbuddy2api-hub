@@ -98,7 +98,8 @@ function Get-UpstreamDeltaSummary {
     $revListDiverge = Get-GitCommandOutput -Repo $Repo -Arguments @("rev-list", "--left-right", "--count", "$ForkBaseRef...$UpstreamRef")
     $ahead = 0
     $behind = 0
-    if ($revListDiverge.ExitCode -eq 0 -and $revListDiverge.StdOut -match '(\d+)\s+(\d+)') {
+    if ($logRes.ExitCode -ne 0 -or $revListDiverge.ExitCode -ne 0 -or $revListDiverge.StdOut -notmatch '^\s*(\d+)\s+(\d+)\s*$') { throw 'STOP: Delta inspection failed' }
+    if ($revListDiverge.StdOut -match '^\s*(\d+)\s+(\d+)\s*$') {
         $ahead  = [int]$Matches[1]
         $behind = [int]$Matches[2]
     }
@@ -112,7 +113,8 @@ function Get-UpstreamDeltaSummary {
         Commits      = $commits
         AheadCount   = $ahead
         BehindCount  = $behind
-        IsDivergent  = ($ahead -gt 0 -and $behind -gt 0)
+        # main must contain no commits outside upstream, including ahead-only drift.
+        IsDivergent  = ($ahead -gt 0)
     }
 }
 
@@ -212,6 +214,13 @@ function Update-ReleaseIdentityFiles {
     $mk = Join-Path $Repo 'wrt/openwrt/workbuddy2api/Makefile'
     $s = Get-Content -LiteralPath $proxy -Raw -Encoding UTF8
     $recipe = Get-Content -LiteralPath $mk -Raw -Encoding UTF8
+    $readme = Join-Path $Repo 'README.md'
+    $doc = Get-Content -LiteralPath $readme -Raw -Encoding UTF8
+    $badgePattern = '(?<prefix><a href="https://github.com/deefery/workbuddy2api-hub/releases"><img src="https://img\.shields\.io/badge/Release-v)(?<version>\d+\.\d+\.\d+\.\d+)(?<middle>-[^"\r\n]+" alt="Version )\k<version>(?<suffix>"></a>)'
+    if ([regex]::Matches($doc, $badgePattern).Count -ne 1 -or
+        [regex]::Matches($doc, 'Release-v').Count -ne 1 -or
+        [regex]::Matches($doc, 'alt="Version ').Count -ne 1) { throw 'STOP: Fork Release badge missing or ambiguous' }
+    $doc = [regex]::Replace($doc, $badgePattern, ('$' + '{prefix}' + $NewVersion + '$' + '{middle}' + $NewVersion + '$' + '{suffix}'))
     if ([regex]::Matches($s, 'server_version\s*=\s*"wb-proxy/[^"]+"').Count -ne 1 -or
         [regex]::Matches($s, '"version"\s*:\s*"[^"]+"').Count -ne 1 -or
         [regex]::Matches($recipe, '(?m)^PKG_VERSION:=[^\r\n]+').Count -ne 1) { throw 'STOP: Identity points missing or ambiguous' }
@@ -221,6 +230,7 @@ function Update-ReleaseIdentityFiles {
     $utf8 = New-Object System.Text.UTF8Encoding($false)
     [IO.File]::WriteAllText($proxy, $s, $utf8)
     [IO.File]::WriteAllText($mk, $recipe, $utf8)
+    [IO.File]::WriteAllText($readme, $doc, $utf8)
     if ((Get-SourceReleaseVersion -Repo $Repo) -ne $NewVersion) { throw 'STOP: Version equality failed' }
 }
 function Test-T008DualNetworkConfig {
@@ -268,8 +278,13 @@ function Invoke-ProductionGates {
         foreach ($action in @('GIT_PUSH', 'DRAFT_RELEASE_VERIFY', 'RELEASE_PUBLISH', 'GHCR_VERIFY')) {
             if ($action -eq 'GIT_PUSH' -and $Context.ResumeRelease) { continue }
             $Evidence.last_gate = $action
-            if ($action -eq 'GIT_PUSH') { $Evidence.git_push_status = 'ATTEMPTED' }
+            if ($action -eq 'GIT_PUSH') {
+                $Evidence.git_push_status = 'ATTEMPTED'
+                # Durable intent also survives termination before the final audit.
+                Write-SyncAuditEvidence -Repo $Context.SourceRepo -EvidenceData $Evidence | Write-Host
+            }
             $r = & $executor $action $Context
+            if ($action -eq 'GIT_PUSH' -and $r.GitPushStatus -eq 'REMOTE_VERIFIED_LOCAL_PENDING') { $Evidence.git_push_status = 'REMOTE_VERIFIED_LOCAL_PENDING' }
             if (-not $r.Success) { throw "STOP: $action failed" }
             if ($action -eq 'GIT_PUSH') { $Evidence.git_push_status = 'VERIFIED' }
             if ($action -eq 'DRAFT_RELEASE_VERIFY' -and (-not $r.Draft -or -not $r.AssetsVerified)) { throw 'STOP: Draft/assets verification failed' }
@@ -331,7 +346,7 @@ function Write-SyncAuditEvidence {
         'upstream_version','current_fork_version','fork_version','fork_tag','ghcr_digest','previous_nas_tag','new_nas_tag',
         'previous_nas_digest','final_health','rollback_status','snapshot_path','integration_path','integration_branch',
         'integration_sha','workspace_clean','has_update','risk_level','t008_dual_network','focused_exit','full_exit',
-        'test_logs','mutates_nas','publishes_release','git_push_status')
+        'test_logs','mutates_nas','publishes_release','git_push_status','old_main_sha','old_custom_sha')
     $safe = @{}
     foreach ($key in $allowed) { if ($EvidenceData.ContainsKey($key)) { $safe[$key] = $EvidenceData[$key] } }
     $path = Join-Path $dir ("sync-$($EvidenceData.mode)-$([guid]::NewGuid().ToString('N')).json")
