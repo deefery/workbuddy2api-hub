@@ -169,3 +169,12 @@ Status: PASS — Review 1 accepted; exact v1.7.3 local integration candidate is 
 - Git merge preflight reproduces semantic conflicts in `README.md`, `wb_proxy.py`, and `wrt/openwrt/workbuddy2api/Makefile`.
 - T-010 resolves and validates the integration candidate only. It does not push/tag/publish or touch NAS. A later release/cutover task will exercise T-007 against the accepted T-010 candidate.
 - Contract: `.ai/tasks/T-010.md`; handoff target: `.ai/handoffs/T-010.md`.
+### T-011 — v1.7.3.1 release & NAS cutover
+
+Status: READY for local/preflight execution. External release staging and final publish/NAS cutover are two explicit Project Owner gates.
+
+- Accepted source baseline: T-010 Review 1 closeout `609593639c2defd820e840ada3554097d0dd8be9`.
+- Expected release: `v1.7.3.1`; exact upstream compatibility SHA `c7dad8fe32316d47ce4f0ff260bb7ac7802b8a94`.
+- Prepared branch/worktree: `task/t011-v1731-release` / `C:\_AI\projects\.webcodex-worktrees\workbuddy2api-hub-t011-v1731-release`.
+- T-011 first promotes the accepted closeout to the maintained `custom/main` baseline, then uses the accepted T-007 pipeline. Gate A ends at verified Draft Release; Gate B resumes the same evidence for publication/GHCR/NAS cutover and rollback-on-failure.
+- Contract: `.ai/tasks/T-011.md`; handoff target: `.ai/handoffs/T-011.md`.
