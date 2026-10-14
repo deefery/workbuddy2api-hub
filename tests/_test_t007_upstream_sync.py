@@ -393,7 +393,12 @@ $mock = {
         original = (self.repo / "README.md").read_text()
         proxy = (self.repo / "wb_proxy.py").read_bytes()
         recipe = (self.repo / "wrt/openwrt/workbuddy2api/Makefile").read_bytes()
-        for content in ["no badge\n", original * 2, original.replace('Version 1.7.2.1', 'Version 9.9.9.9')]:
+        current_alt = original.split('alt="Version ', 1)[1].split('"', 1)[0]
+        wrong_alt = "9.9.9.9" if current_alt != "9.9.9.9" else "8.8.8.8"
+        disagreeing = original.replace(
+            f'alt="Version {current_alt}"', f'alt="Version {wrong_alt}"', 1)
+        self.assertNotEqual(disagreeing, original)
+        for content in ["no badge\n", original * 2, disagreeing]:
             with self.subTest(content=content):
                 (self.repo / "README.md").write_text(content)
                 rc, out = self.ps(". ./tools/UpstreamSync.Common.ps1\nUpdate-ReleaseIdentityFiles -Repo . -NewVersion 1.7.3.1")
