@@ -161,7 +161,7 @@ Status: READY for Executor implementation on dedicated branch/worktree; producti
 
 ### T-010 — Upstream v1.7.3 conflict resolution
 
-Status: READY for Executor-hard local integration/review; release/GHCR/NAS external effects remain a later separately authorized task.
+Status: PASS — Review 1 accepted; exact v1.7.3 local integration candidate is accepted. Release/GHCR/NAS external effects remain a later separately authorized task.
 
 - Exact upstream target: `v1.7.3` / `c7dad8fe32316d47ce4f0ff260bb7ac7802b8a94`.
 - Prepared base `59ca4de86b26fb6ef69d6ea4d39a9f18b9b0a253` combines current `custom/main` project state with accepted T-007 Review 3 implementation.
