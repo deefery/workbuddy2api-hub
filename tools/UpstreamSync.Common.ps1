@@ -265,8 +265,18 @@ function Invoke-FullTestSuiteGate {
 function Invoke-LiveExternalOperation {
     param([string]$Action, [hashtable]$Context)
     $r = Invoke-SyncProcess -Executable (Get-SyncPython $Context.PythonExe) -Repo $Context.Repo -Arguments @((Join-Path $PSScriptRoot 'upstream_ops.py'), $Action) -InputText ($Context | ConvertTo-Json -Depth 5 -Compress)
-    if ($r.ExitCode -ne 0) { throw "STOP: External action $Action failed (details suppressed)" }
-    try { $r.StdOut | ConvertFrom-Json } catch { throw "STOP: Invalid response from $Action" }
+    $parsed = $null
+    if ($r.StdOut) {
+        try { $parsed = $r.StdOut | ConvertFrom-Json } catch { }
+    }
+    if ($r.ExitCode -ne 0) {
+        $reason = if ($parsed -and $parsed.Reason) { $parsed.Reason } else { "External action $Action failed (details suppressed)" }
+        $err = New-Object System.Management.Automation.RuntimeException("STOP: $reason")
+        $err.Data["stop_reason"] = $reason
+        throw $err
+    }
+    if (-not $parsed) { throw "STOP: Invalid response from $Action" }
+    return $parsed
 }
 
 function Invoke-ProductionGates {
@@ -275,7 +285,7 @@ function Invoke-ProductionGates {
     if (-not $Context.AuthorizeRelease) { throw 'STOP: Release authorization required before push/tag' }
     $mutation = $false
     try {
-        foreach ($action in @('GIT_PUSH', 'DRAFT_RELEASE_VERIFY', 'RELEASE_PUBLISH', 'GHCR_VERIFY')) {
+        foreach ($action in @('GIT_PUSH', 'DRAFT_RELEASE_VERIFY', 'GHCR_CAPABILITY_PREFLIGHT', 'RELEASE_PUBLISH', 'GHCR_VERIFY')) {
             if ($action -eq 'GIT_PUSH' -and $Context.ResumeRelease) { continue }
             $Evidence.last_gate = $action
             if ($action -eq 'GIT_PUSH') {

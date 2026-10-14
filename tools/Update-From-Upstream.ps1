@@ -37,7 +37,7 @@ try {
             $saved.fork_tag -notmatch '^v\d+\.\d+\.\d+\.\d+$' -or
             $saved.integration_sha -notmatch '^[a-f0-9]{40}$' -or
             $saved.new_upstream_sha -notmatch '^[a-f0-9]{40}$' -or
-            ($saved.status -ne 'DRAFT_READY_AWAITING_REVIEW' -and $saved.last_gate -notin @('GIT_PUSH','DRAFT_RELEASE_VERIFY','RELEASE_PUBLISH'))) {
+            ($saved.status -ne 'DRAFT_READY_AWAITING_REVIEW' -and $saved.last_gate -notin @('GIT_PUSH','DRAFT_RELEASE_VERIFY','GHCR_CAPABILITY_PREFLIGHT','RELEASE_PUBLISH'))) {
             throw 'STOP: Invalid release continuation evidence'
         }
         if (-not (Get-SyncGitContext -Repo $repo).IsClean) { throw 'STOP: Continuation worktree dirty' }
@@ -127,7 +127,10 @@ try {
     Write-Host $e.status
 } catch {
     # Never embed arbitrary command output, URLs or secret-bearing exceptions in evidence.
-    $e.stop_reason = "Failed at $($e.last_gate); see gate-specific local diagnostics"
+    $extractedReason = if ($_.Exception.Data -and $_.Exception.Data["stop_reason"]) { $_.Exception.Data["stop_reason"] } else { $null }
+    if (-not $e.stop_reason) {
+        $e.stop_reason = if ($extractedReason) { $extractedReason } else { "Failed at $($e.last_gate); see gate-specific local diagnostics" }
+    }
     Write-Error ("STOP: " + $e.stop_reason)
 } finally {
     $audit = Write-SyncAuditEvidence -Repo $RepoPath -EvidenceData $e

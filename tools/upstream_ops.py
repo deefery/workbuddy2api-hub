@@ -5,6 +5,8 @@ stores or NAS-mounted settings; command output/errors are never echoed.
 """
 import hashlib
 import json
+import urllib.request
+import urllib.error
 import re
 import shlex
 import subprocess
@@ -18,12 +20,26 @@ TAG_RE = re.compile(r"v\d+\.\d+\.\d+\.\d+")
 DIGEST_RE = re.compile(r"sha256:[a-f0-9]{64}")
 
 
+class ExternalGateError(RuntimeError):
+    def __init__(self, reason, message=None):
+        super().__init__(message or f"External gate failed ({reason})")
+        self.reason = reason
+
+
 def run(argv, *, cwd=None, stdin=None):
-    p = subprocess.run(argv, cwd=cwd, input=stdin, text=True, encoding="utf-8",
-                       capture_output=True, timeout=180)
+    stdin_bytes = None
+    if stdin is not None:
+        if isinstance(stdin, str):
+            stdin = stdin.replace("\r\n", "\n")
+            stdin_bytes = stdin.encode("utf-8")
+        else:
+            stdin_bytes = stdin
+    p = subprocess.run(argv, cwd=cwd, input=stdin_bytes, capture_output=True, timeout=180)
     if p.returncode:
+        if argv and argv[0] == "ssh" and p.returncode == 127:
+            raise ExternalGateError("REMOTE_DOCKER_NOT_FOUND", "Remote command failed (exit code 127)")
         raise RuntimeError("External command failed; output suppressed")
-    return p.stdout
+    return p.stdout.decode("utf-8", errors="replace")
 
 
 def git(c, *args):
@@ -57,7 +73,7 @@ def view_release(c):
 
 def verify_assets(c, release):
     v = c["NewTag"][1:]
-    recipe = (Path(c["Repo"]) / "wrt/openwrt/workbuddy2api/Makefile").read_text()
+    recipe = (Path(c["Repo"]) / "wrt/openwrt/workbuddy2api/Makefile").read_text(encoding="utf-8")
     m = re.findall(r"^PKG_RELEASE:=(\d+)$", recipe, re.M)
     if len(m) != 1:
         raise RuntimeError("Unknown package release")
@@ -70,7 +86,7 @@ def verify_assets(c, release):
     run(["gh", "release", "download", c["NewTag"], "--repo", GITHUB_REPO,
          "--dir", str(dest), "--clobber"])
     hashes = {}
-    for line in (dest / "SHA256SUMS").read_text().splitlines():
+    for line in (dest / "SHA256SUMS").read_text(encoding="utf-8").splitlines():
         match = re.fullmatch(r"([a-f0-9]{64})  (\S+)", line)
         if not match or match[2] in hashes or match[2] not in names - {"SHA256SUMS"}:
             raise RuntimeError("Invalid checksum manifest")
@@ -88,6 +104,17 @@ def verify_assets(c, release):
     return True
 
 
+REMOTE_DOCKER_PRELUDE = '''if ! command -v docker >/dev/null 2>&1; then
+  for candidate in /share/CACHEDEV1_DATA/.qpkg/container-station/bin /share/CACHEDEV1_DATA/.qpkg/container-station/usr/bin; do
+    if [ -x "$candidate/docker" ]; then
+      PATH="$candidate:$PATH"
+      break
+    fi
+  done
+fi
+'''
+
+
 def ssh(c, script):
     host = c.get("TargetNasHost") or ""
     directory = c.get("NasDirectory") or ""
@@ -95,9 +122,10 @@ def ssh(c, script):
         raise RuntimeError("Explicit SSH host/alias required")
     if not re.fullmatch(r"/[a-zA-Z0-9_./-]+", directory) or ".." in directory.split("/"):
         raise RuntimeError("Invalid NAS directory")
+    full_script = "set -eu\n" + REMOTE_DOCKER_PRELUDE + "cd " + shlex.quote(directory) + "\n" + script
     # Payload only through stdin, no passwords in arguments/logs.
     return run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, "sh", "-s"],
-               stdin="set -eu\ncd " + shlex.quote(directory) + "\n" + script)
+               stdin=full_script)
 
 
 HEALTH_CODE = """import json,urllib.request
@@ -262,10 +290,94 @@ def push_reviewed_refs(c):
     return {"Success": True, "GitPushStatus": "VERIFIED"}
 
 
+GHCR_REGISTRY_BASE = "https://ghcr.io/v2/deefery/workbuddy2api-hub"
+OCI_INDEX_MEDIA = "application/vnd.oci.image.index.v1+json"
+DOCKER_MANIFEST_LIST_MEDIA = "application/vnd.docker.distribution.manifest.list.v2+json"
+OCI_MANIFEST_MEDIA = "application/vnd.oci.image.manifest.v1+json"
+DOCKER_MANIFEST_MEDIA = "application/vnd.docker.distribution.manifest.v2+json"
+ACCEPT_MANIFEST_HEADER = f"{OCI_INDEX_MEDIA}, {DOCKER_MANIFEST_LIST_MEDIA}, {OCI_MANIFEST_MEDIA}, {DOCKER_MANIFEST_MEDIA}"
+
+
+def request_ghcr(path, *, token=None, accept=None):
+    url = f"{GHCR_REGISTRY_BASE}/{path.lstrip('/')}"
+    headers = {"User-Agent": "workbuddy2api-hub-t007"}
+    if accept:
+        headers["Accept"] = accept
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.status, dict(resp.headers), resp.read()
+    except urllib.error.HTTPError as e:
+        if e.code == 401 and token is None:
+            auth_header = e.headers.get("WWW-Authenticate")
+            if not auth_header:
+                raise ExternalGateError("GHCR_UNAUTHORIZED", "Registry 401 without challenge header")
+            m_realm = re.search(r'realm="([^"]+)"', auth_header)
+            m_service = re.search(r'service="([^"]+)"', auth_header)
+            m_scope = re.search(r'scope="([^"]+)"', auth_header)
+            if not m_realm:
+                raise ExternalGateError("GHCR_UNAUTHORIZED", "Registry realm challenge missing")
+            token_url = m_realm.group(1)
+            params = []
+            if m_service:
+                params.append(f"service={urllib.request.quote(m_service.group(1))}")
+            if m_scope:
+                params.append(f"scope={urllib.request.quote(m_scope.group(1))}")
+            if params:
+                token_url += ("&" if "?" in token_url else "?") + "&".join(params)
+            tok_req = urllib.request.Request(token_url, headers={"User-Agent": "workbuddy2api-hub-t007"})
+            try:
+                with urllib.request.urlopen(tok_req, timeout=30) as tok_resp:
+                    tok_data = json.loads(tok_resp.read().decode("utf-8"))
+                    bearer_token = tok_data.get("token") or tok_data.get("access_token")
+                    if not bearer_token:
+                        raise ExternalGateError("GHCR_TOKEN_FAILURE", "Empty token payload from registry auth")
+            except Exception as tok_err:
+                if isinstance(tok_err, ExternalGateError):
+                    raise
+                raise ExternalGateError("GHCR_TOKEN_FAILURE", "Failed to acquire registry bearer token") from tok_err
+            return request_ghcr(path, token=bearer_token, accept=accept)
+        raise ExternalGateError("GHCR_HTTP_ERROR", f"Registry HTTP error: {e.code}") from e
+    except Exception as e:
+        raise ExternalGateError("GHCR_NETWORK_ERROR", "Registry network failure") from e
+
+
+def fetch_ghcr_manifest(reference):
+    status, headers, body = request_ghcr(f"manifests/{reference}", accept=ACCEPT_MANIFEST_HEADER)
+    digest = "sha256:" + hashlib.sha256(body).hexdigest()
+    try:
+        manifest_obj = json.loads(body.decode("utf-8"))
+    except Exception as e:
+        raise ExternalGateError("GHCR_MALFORMED_MANIFEST", "Failed to parse registry manifest JSON") from e
+    return manifest_obj, digest
+
+
+def verify_ghcr_image(c):
+    tag = c["NewTag"]
+    manifest_by_tag, computed_tag_digest = fetch_ghcr_manifest(tag)
+    manifests = manifest_by_tag.get("manifests")
+    if not isinstance(manifests, list) or not manifests:
+        raise ExternalGateError("GHCR_INVALID_MANIFEST", "Registry response is not a multi-arch manifest list")
+    platforms = set()
+    for m in manifests:
+        platform = m.get("platform", {})
+        platforms.add((platform.get("os"), platform.get("architecture")))
+    if not {("linux", "amd64"), ("linux", "arm64")} <= platforms:
+        raise ExternalGateError("GHCR_PLATFORM_MISMATCH", "Required platforms (linux/amd64, linux/arm64) missing")
+    if not DIGEST_RE.fullmatch(computed_tag_digest):
+        raise ExternalGateError("GHCR_DIGEST_UNRESOLVED", "Immutable digest format unresolved")
+    manifest_by_digest, computed_frozen_digest = fetch_ghcr_manifest(computed_tag_digest)
+    if computed_frozen_digest != computed_tag_digest or manifest_by_digest != manifest_by_tag:
+        raise ExternalGateError("GHCR_MUTABLE_TAG_DETECTED", "Registry tag changed during verification")
+    return {"Success": True, "Digest": computed_tag_digest, "MultiArch": True}
+
+
 def execute(action, c):
     if not TAG_RE.fullmatch(c["NewTag"]):
         raise RuntimeError("Invalid tag")
-    if action in {"GIT_PUSH", "DRAFT_RELEASE_VERIFY", "RELEASE_PUBLISH", "GHCR_VERIFY"} and not c.get("AuthorizeRelease"):
+    if action in {"GIT_PUSH", "DRAFT_RELEASE_VERIFY", "GHCR_CAPABILITY_PREFLIGHT", "RELEASE_PUBLISH", "GHCR_VERIFY"} and not c.get("AuthorizeRelease"):
         raise RuntimeError("Release authorization missing")
     if action.startswith("NAS_") and (not c.get("AuthorizeNas") or c.get("StateCompatibilitySha") != c["UpstreamSha"]):
         raise RuntimeError("NAS/state authorization missing")
@@ -280,13 +392,13 @@ def execute(action, c):
             raise RuntimeError("Remote tag identity changed")
         verify_assets(c, release)
         # Persist immutable review identity for the subsequent boundary process.
-        Path(c["Repo"], ".ai/runtime/draft-id").write_text(str(release["id"]))
+        Path(c["Repo"], ".ai/runtime/draft-id").write_text(str(release["id"]), encoding="utf-8")
         return {"Success": True, "Draft": True, "AssetsVerified": True}
     if action == "RELEASE_PUBLISH":
         if not c.get("ResumeRelease") or c.get("ReviewedDraftTag") != c["NewTag"]:
             raise RuntimeError("STOP: Human draft review/publication required; rerun after review")
         release = view_release(c)
-        saved = Path(c["Repo"], ".ai/runtime/draft-id").read_text()
+        saved = Path(c["Repo"], ".ai/runtime/draft-id").read_text(encoding="utf-8")
         if str(release["id"]) != saved or not release["isDraft"] or release["isPrerelease"]:
             raise RuntimeError("Draft changed")
         verify_assets(c, release)
@@ -295,26 +407,19 @@ def execute(action, c):
         if published["isDraft"] or published["isPrerelease"]:
             raise RuntimeError("Release not published")
         return {"Success": True, "Published": True}
+    if action == "GHCR_CAPABILITY_PREFLIGHT":
+        # Pre-publish capability check: verify GHCR is accessible before publishing release.
+        request_ghcr("tags/list?n=1")
+        return {"Success": True, "PreflightPassed": True}
     if action == "GHCR_VERIFY":
         wait_workflow(c, "docker-publish.yml", "release")
         published = view_release(c)
         if published["isDraft"] or published["isPrerelease"]:
             raise RuntimeError("Published release missing")
-        name = f"{IMAGE}:{c['NewTag']}"
-        manifest = json.loads(run(["docker", "buildx", "imagetools", "inspect", name, "--raw"]))
-        platforms = {(m["platform"]["os"], m["platform"]["architecture"]) for m in manifest["manifests"]}
-        if not {("linux", "amd64"), ("linux", "arm64")} <= platforms:
-            raise RuntimeError("Required platforms missing")
-        display = run(["docker", "buildx", "imagetools", "inspect", name])
-        matches = re.findall(r"^Digest:\s+(sha256:[a-f0-9]{64})\s*$", display, re.M)
-        if len(matches) != 1:
-            raise RuntimeError("Immutable digest unresolved")
-        # Read by the immutable index too, ruling out a moving tag between calls.
-        frozen = json.loads(run(["docker", "buildx", "imagetools", "inspect", f"{IMAGE}@{matches[0]}", "--raw"]))
-        if frozen != manifest:
-            raise RuntimeError("Image tag changed during verification")
-        return {"Success": True, "Digest": matches[0], "MultiArch": True}
+        return verify_ghcr_image(c)
     if action == "NAS_PREFLIGHT_AND_SNAPSHOT":
+        # Docker/compose capability check before snapshot:
+        ssh(c, "docker --version >/dev/null 2>&1 && docker compose version >/dev/null 2>&1\n")
         previous = ssh(c, "sed -n 's/^WB_IMAGE_TAG=//p' .env\n").strip()
         if not TAG_RE.fullmatch(previous):
             raise RuntimeError("Previous tag unresolved")
@@ -367,7 +472,13 @@ trap - 0 1 2 3 15
 if __name__ == "__main__":
     try:
         print(json.dumps(execute(sys.argv[1], json.load(sys.stdin))))
+    except ExternalGateError as e:
+        # Bounded reason classification without echoing sensitive outputs or tracebacks.
+        print(json.dumps({"Success": False, "Reason": e.reason,
+                          "Error": "External gate failed; inspect operator tools securely"}))
+        sys.exit(1)
     except Exception:
         # Never print credentials, settings or a potentially secret-bearing subprocess exception.
-        print(json.dumps({"Success": False, "Error": "External gate failed; inspect operator tools securely"}))
+        print(json.dumps({"Success": False, "Reason": "UNCLASSIFIED_ERROR",
+                          "Error": "External gate failed; inspect operator tools securely"}))
         sys.exit(1)

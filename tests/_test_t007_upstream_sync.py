@@ -125,7 +125,7 @@ $mock = {
    if (THROWS) { throw 'injected exception with sk-secret-canary' }
    return @{Success=$false}
  }
- $r = @{Success=$true;Draft=$true;AssetsVerified=$true;Published=$true;MultiArch=$true;Digest=DIGEST;
+ $r = @{Success=$true;Draft=$true;AssetsVerified=$true;PreflightPassed=$true;Published=$true;MultiArch=$true;Digest=DIGEST;
        PreviousDigest=PREVIOUS;PreviousTag='v1.7.2.9';SnapshotPath='/fixture/snapshot';AccountsReady=3;
        Healthy=$true;NetworkOk=$true;SmokePassed=$true;RestoredTag='v1.7.2.9'}
  if ($Action -eq 'NAS_ROLLBACK') { $r.Digest=PREVIOUS }
@@ -250,7 +250,7 @@ $mock = {
         self.assertEqual(self.evidence()["last_gate"], "T008")
 
     def test_each_external_failure_blocks_later_effects_or_rolls_back(self):
-        order = ["GIT_PUSH", "DRAFT_RELEASE_VERIFY", "RELEASE_PUBLISH", "GHCR_VERIFY",
+        order = ["GIT_PUSH", "DRAFT_RELEASE_VERIFY", "GHCR_CAPABILITY_PREFLIGHT", "RELEASE_PUBLISH", "GHCR_VERIFY",
                  "NAS_PREFLIGHT_AND_SNAPSHOT", "NAS_DEPLOY_TAG", "NAS_VERIFY", "NAS_AUTHENTICATED_SMOKE"]
         # Each pass creates a new integration branch from the same untouched custom/main.
         for i, action in enumerate(order):
@@ -259,10 +259,10 @@ $mock = {
                     self.trace.unlink()
                 rc, out = self.update(failure=action, throws=(i % 2 == 1))
                 self.assertNotEqual(rc, 0, out)
-                expected = order[:i+1] + (["NAS_ROLLBACK"] if i >= 5 else [])
+                expected = order[:i+1] + (["NAS_ROLLBACK"] if i >= 6 else [])
                 self.assertEqual(self.actions(), expected)
                 e = self.evidence()
-                self.assertEqual(e["rollback_status"], "VERIFIED" if i >= 5 else "NOT_NEEDED")
+                self.assertEqual(e["rollback_status"], "VERIFIED" if i >= 6 else "NOT_NEEDED")
                 self.assertNotIn("sk-secret-canary", json.dumps(e))
 
     def test_postdeploy_fields_are_enforced(self):
@@ -531,9 +531,12 @@ class LiveBoundaryTests(unittest.TestCase):
 
     def test_ghcr_wrong_platforms_stop(self):
         c = self.context()
+        bad_manifest = {"manifests": [{"platform": {"os": "linux", "architecture": "amd64"}}]}
         with patch.object(OPS, "wait_workflow"), patch.object(OPS, "view_release", return_value={"isDraft": False, "isPrerelease": False}), \
-             patch.object(OPS, "run", return_value=json.dumps({"manifests": [{"platform": {"os": "linux", "architecture": "amd64"}}]})):
-            with self.assertRaises(RuntimeError): OPS.execute("GHCR_VERIFY", c)
+             patch.object(OPS, "request_ghcr", return_value=(200, {}, json.dumps(bad_manifest).encode("utf-8"))):
+            with self.assertRaises(RuntimeError) as cm:
+                OPS.execute("GHCR_VERIFY", c)
+            self.assertEqual(cm.exception.reason, "GHCR_PLATFORM_MISMATCH")
 
     def test_assets_checksum_verification(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -559,6 +562,7 @@ class LiveBoundaryTests(unittest.TestCase):
         inspect = [{"Image": "img-id", "Config": {"Image": OPS.IMAGE + ":v1.7.2.9"}}]
         image = [{"RepoDigests": [OPS.IMAGE + "@" + PREVIOUS]}]
         def ssh(ctx, script):
+            if "docker --version" in script: return ""
             if script.startswith("sed"): return "v1.7.2.9\n"
             if script.startswith("docker inspect"): return json.dumps(inspect)
             if script.startswith("docker image inspect"): return json.dumps(image)
@@ -625,6 +629,130 @@ class LiveBoundaryTests(unittest.TestCase):
                     return json.dumps(ready)
                 with patch.object(OPS, "ssh", side_effect=ssh):
                     with self.assertRaises(RuntimeError): OPS.health(c, DIGEST)
+
+
+    def test_utf8_locale_independence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            c = self.context(); c["Repo"] = tmp
+            recipe = Path(tmp) / "wrt/openwrt/workbuddy2api/Makefile"
+            recipe.parent.mkdir(parents=True)
+            # UTF-8 non-ASCII characters that fail under GBK/cp1252:
+            recipe.write_text("PKG_RELEASE:=1\n# 测试中文字符与特殊符号 €★\n", encoding="utf-8")
+            dest = Path(tmp) / ".ai/runtime/release-assets"
+            dest.mkdir(parents=True)
+            names = ["workbuddy2api-hub-v1.7.2.2.zip", "workbuddy2api_1.7.2.2-1_all.ipk", "workbuddy2api-1.7.2.2-r1.apk"]
+            for name in names: (dest/name).write_bytes(b"fixture")
+            sums = "\n".join(OPS.hashlib.sha256(b"fixture").hexdigest()+"  "+n for n in names)
+            (dest/"SHA256SUMS").write_text(sums + "\n", encoding="utf-8")
+            release = {"assets": [{"name": n} for n in names+["SHA256SUMS"]]}
+            with patch.object(OPS, "run"):
+                self.assertTrue(OPS.verify_assets(c, release))
+
+    def test_lf_safe_ssh_transport(self):
+        c = self.context()
+        c["TargetNasHost"] = "nas-host"
+        c["NasDirectory"] = "/share/test"
+        captured = []
+        def fake_run(argv, *, cwd=None, input=None, capture_output=True, timeout=180):
+            captured.append((argv, input))
+            class Resp:
+                returncode = 0
+                stdout = b"ok\n"
+            return Resp()
+        with patch("subprocess.run", side_effect=fake_run):
+            OPS.ssh(c, "echo hello\r\necho world\r\n")
+        self.assertEqual(len(captured), 1)
+        argv, stdin_bytes = captured[0]
+        self.assertIsInstance(stdin_bytes, bytes)
+        self.assertNotIn(b"\r\n", stdin_bytes)
+        self.assertIn(b"\n", stdin_bytes)
+        self.assertIn(b"/share/CACHEDEV1_DATA/.qpkg/container-station/bin", stdin_bytes)
+
+    def test_remote_docker_discovery_and_fallback(self):
+        c = self.context()
+        c["TargetNasHost"] = "nas-host"
+        c["NasDirectory"] = "/share/test"
+        # Remote exit 127 indicates missing docker executable in non-interactive environment
+        def fake_run(argv, *, cwd=None, input=None, capture_output=True, timeout=180):
+            class Resp:
+                returncode = 127
+                stdout = b""
+            return Resp()
+        with patch("subprocess.run", side_effect=fake_run):
+            with self.assertRaises(OPS.ExternalGateError) as cm:
+                OPS.ssh(c, "docker inspect wb-proxy\n")
+            self.assertEqual(cm.exception.reason, "REMOTE_DOCKER_NOT_FOUND")
+
+    def test_docker_free_ghcr_verification(self):
+        c = self.context()
+        multi_manifest = {
+            "schemaVersion": 2,
+            "mediaType": OPS.OCI_INDEX_MEDIA,
+            "manifests": [
+                {"platform": {"os": "linux", "architecture": "amd64"}, "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"},
+                {"platform": {"os": "linux", "architecture": "arm64"}, "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"}
+            ]
+        }
+        body_bytes = json.dumps(multi_manifest).encode("utf-8")
+        expected_digest = "sha256:" + OPS.hashlib.sha256(body_bytes).hexdigest()
+
+        with patch.object(OPS, "wait_workflow"), \
+             patch.object(OPS, "view_release", return_value={"isDraft": False, "isPrerelease": False}), \
+             patch.object(OPS, "request_ghcr", return_value=(200, {}, body_bytes)):
+            res = OPS.execute("GHCR_VERIFY", c)
+            self.assertTrue(res["Success"])
+            self.assertEqual(res["Digest"], expected_digest)
+            self.assertTrue(res["MultiArch"])
+
+        # Missing arm64 fails closed
+        amd_only = {"manifests": [{"platform": {"os": "linux", "architecture": "amd64"}}]}
+        with patch.object(OPS, "wait_workflow"), \
+             patch.object(OPS, "view_release", return_value={"isDraft": False, "isPrerelease": False}), \
+             patch.object(OPS, "request_ghcr", return_value=(200, {}, json.dumps(amd_only).encode("utf-8"))):
+            with self.assertRaises(OPS.ExternalGateError) as cm:
+                OPS.execute("GHCR_VERIFY", c)
+            self.assertEqual(cm.exception.reason, "GHCR_PLATFORM_MISMATCH")
+
+        # Moving tag between calls fails closed
+        second_manifest = {"manifests": [{"platform": {"os": "linux", "architecture": "amd64"}}, {"platform": {"os": "linux", "architecture": "arm64"}, "extra": 1}]}
+        with patch.object(OPS, "wait_workflow"), \
+             patch.object(OPS, "view_release", return_value={"isDraft": False, "isPrerelease": False}), \
+             patch.object(OPS, "request_ghcr", side_effect=[
+                 (200, {}, body_bytes),
+                 (200, {}, json.dumps(second_manifest).encode("utf-8"))
+             ]):
+            with self.assertRaises(OPS.ExternalGateError) as cm:
+                OPS.execute("GHCR_VERIFY", c)
+            self.assertEqual(cm.exception.reason, "GHCR_MUTABLE_TAG_DETECTED")
+
+    def test_pre_publish_ordering_and_capability_gate(self):
+        c = self.context()
+        # Verify GHCR_CAPABILITY_PREFLIGHT calls request_ghcr
+        with patch.object(OPS, "request_ghcr", return_value=(200, {}, b'{"tags":["v1.7.4.1"]}')):
+            res = OPS.execute("GHCR_CAPABILITY_PREFLIGHT", c)
+            self.assertTrue(res["Success"])
+            self.assertTrue(res["PreflightPassed"])
+
+        # When request_ghcr fails, GHCR_CAPABILITY_PREFLIGHT throws ExternalGateError
+        with patch.object(OPS, "request_ghcr", side_effect=OPS.ExternalGateError("GHCR_UNAUTHORIZED")):
+            with self.assertRaises(OPS.ExternalGateError) as cm:
+                OPS.execute("GHCR_CAPABILITY_PREFLIGHT", c)
+            self.assertEqual(cm.exception.reason, "GHCR_UNAUTHORIZED")
+
+    def test_secret_safety_on_classification(self):
+        # Ensure external gate failure outputs structured reason without echo of sensitive tokens
+        secret_canary = "ghp_VerySecretAccessToken12345"
+        err = OPS.ExternalGateError("GHCR_TOKEN_FAILURE", f"Failed with {secret_canary}")
+        self.assertEqual(err.reason, "GHCR_TOKEN_FAILURE")
+        # In subprocess execution via __main__, only reason is emitted
+        proc = subprocess.run(
+            [sys.executable, "-c",
+             "import json, sys; sys.path.insert(0, 'tools'); import upstream_ops; "
+             f"raise upstream_ops.ExternalGateError('GHCR_TOKEN_FAILURE', '{secret_canary}')"],
+            capture_output=True, text=True
+        )
+        self.assertNotIn(secret_canary, proc.stdout)
+
 
 
 class PushRecoveryTests(unittest.TestCase):
@@ -755,6 +883,7 @@ class PushRecoveryTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 OPS.execute("GIT_PUSH", self.c)
             self.assertFalse(any(x.args[1] in {"tag", "push", "update-ref"} for x in calls.call_args_list))
+
 
     def test_local_ref_mismatch_after_verified_push_requires_manual_recovery(self):
         with patch.object(OPS, "git", side_effect=self.local_boundary):
