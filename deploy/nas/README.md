@@ -23,10 +23,10 @@ Use an exact reviewed commit on `custom/main`.
 
 The upstream test workflow treats every `v*` tag as a real source-version release and requires the tag (without the leading `v`) to equal both version strings in `wb_proxy.py`. Keep that invariant for fork releases rather than bypassing it.
 
-1. Choose the fork version, recommended as `<upstream-version>-deefery.<n>` while the fork remains closely based on upstream (for example `1.7.2-deefery.1`).
+1. Choose the fork version, strictly formatted as <upstream-version>.<fork-revision> per D-004/D-010 (for example 1.7.2.1 or 1.7.3.1). Do not use hyphens (-deefery.1), which break OpenWrt APK packaging.
 2. As a release-preparation change, set both source version strings in `wb_proxy.py` to that exact fork version and run the project test suite/release checks.
-3. Create the matching `v<fork-version>` tag only after those version changes are reviewed (example: `v1.7.2-deefery.1`). The existing `v*` CI then validates tag == source version instead of being bypassed.
-4. Push the reviewed commit/tag and publish a GitHub Release that points to the tag.
+3. Create the matching `v<fork-version>` tag only after those version changes are reviewed (example: `v1.7.2.1`). The existing `v*` CI then validates tag == source version instead of being bypassed.
+4. Push the reviewed commit/tag. Wait for release.yml to produce a Draft Release after the full matrix and asset checks; review that existing draft before publishing it.
 5. Wait for both the release validation and **Publish Docker image** workflows to pass.
 6. Confirm GHCR contains the exact tag before touching the NAS.
 7. If the GHCR package is public, the NAS can pull without login. If it is private, authenticate the NAS with `docker login ghcr.io` using a credential that has only the permissions required to pull packages. Do not store that credential in this repository or Compose file.
@@ -105,3 +105,17 @@ Because `data/accounts` and `data/usage` are host mounts, replacing the image do
 - `.env` is local deployment state and is ignored by Git.
 - Never place WorkBuddy credentials, API keys, passwords, GHCR tokens, or copied `accounts`/`usage` data in this repository.
 - Registry authentication belongs in Docker's credential store on the NAS, not in Compose.
+
+
+## Upstream update and safe rollback (T-007)
+
+See [operator instructions](../../tools/README-upstream-sync.md) for the authoritative parameters and recovery procedure.
+
+- Check-Upstream.cmd inspects drift, strict identity and T-008 membership.
+- Update-From-Upstream.cmd -DryRun plans only; integration/tests/external gates are NOT RUN.
+- Actual local staging merges in an isolated integration worktree and runs focused + full tests. Any failure (including a known baseline failure) or skipped suite file blocks release.
+- Explicitly authorized release staging pushes the exact tested SHA/tag and verifies the CI-created draft/assets. It pauses for human draft review; the original evidence file is the continuation entry.
+- NAS authorization is separate. Unknown state compatibility stops before NAS access. Snapshot includes .env, Compose, accounts and usage while wb-proxy is stopped, then resumes the previous container.
+- Deployment pulls the verified immutable digest, assigns the exact tag, changes only WB_IMAGE_TAG and recreates wb-proxy. It checks health, previous account-ready count, both Docker networks and an authenticated /v1/models request.
+- Failure after deployment attempts rollback to the observed previous tag/digest and verifies health/accounts/network/auth again. A failed rollback records manual recovery required.
+- These paths are tested locally with injected boundaries. A real GitHub/GHCR/NAS update has not been performed for T-007 Review 2.

@@ -1,0 +1,82 @@
+# T-007 — Review 2 handoff
+
+Status: **READY FOR REVIEW — Review 2**
+Date: 2026-10-14
+Role: Executor; independent Architect/Reviewer acceptance is pending.
+
+## Exact candidate and recovery scope
+
+- Worktree: C:\_AI\projects\.webcodex-worktrees\workbuddy2api-hub-t007
+- Branch: T-007-upstream-safe-update
+- Approved base: 34154c48f7c3a2f2b40bbb5cc008295ac0e9a809
+- Rejected Review 1 commit: f8815153e08ed0aaae0332118ab808df31bf1cc6
+- Final implementation commit: **b585d579a6a2aa05bb6396848f1190d74a3da857**
+- Original Review 2 documentation commit: **d60b8a60b236f8e4fa3424931f459d188019854d**. Its receipt remains [.ai/runtime/review2-final-receipt.json](../runtime/review2-final-receipt.json). The subsequent recovery verification changes this handoff only; exact final HEAD and clean status are recorded after commit in [.ai/runtime/review2-recovery-receipt.json](../runtime/review2-recovery-receipt.json).
+- Entry: [resume contract](../tasks/T-007-review1-resume.md); authority: [Task](../tasks/T-007.md) and [Review 1 R1–R8](../reviews/T-007-review1.md).
+- Executor used the current Codex host session through MyWC/WebCodex, session wc_sess_B4nGkg5eDAjTZE66. Exact model ID/effort/provider was not exposed; recorded as unknown. No subagent was used.
+
+The intentionally dirty breakpoint was audited before edits. The initial HEAD and all supplied context were retained. No reset, clean, stash, discarded checkpoint, replacement task/worktree, or upstream v1.7.3 integration occurred. Interrupted Git inspection helpers, strict-version draft, runtime ignore and documentation work were inspected and salvaged; wrong paths, incomplete entrypoint wiring, tolerated baseline failure and success-returning external defaults were corrected.
+
+The canonical editor rejected the interrupted Common file's bare CR and the old test file's mixed line endings. After the initial whole-file write was automatically rejected, repair used byte-preserved local snapshots plus guarded exact function edits / HEAD-equality checks, not a discard-and-recreate workflow. Original bytes are in .ai/runtime/resume-checkpoint/. The old rejected handoff remains [historical evidence](T-007-review1-historical.md). Two diagnostic audit files temporarily created at C:\.ai\runtime by the reproduced old PowerShell default-path bug were removed by their exact verified filenames; no directory cleanup was performed.
+
+## Executor repair disposition
+
+These are implementation claims and test results for Review 2, not Reviewer PASS.
+
+| Finding | Implemented behavior / verification |
+| --- | --- |
+| R1 | Real external executor in tools/upstream_ops.py: atomic exact refs/tag push; CI-created stable draft + exact asset/hash checks; reviewed existing-draft publication; exact-SHA GHCR workflow + both platforms + immutable digest; NAS preflight/quiesced snapshot/deploy/health/accounts/network/auth; verified previous-tag/digest rollback. No successful production stub, historical digest or assumed previous tag remains. Release and NAS authorization are separate. |
+| R2 | Actual upstream merge into a unique codex/sync-upstream-* integration branch/worktree from exact custom/main; ancestry/ref checks precede identity/tests. Conflicts retain the integration worktree and stop. Operator checkout is not switched/reset. The authorized live push synchronizes upstream-friendly main deliberately, refusing a checked-out local main; unchanged clean custom/main can fast-forward after push. |
+| R3 | Invoke-FullTestSuiteGate genuinely runs both release-engineering and tests/run_all.py, retains both exits/logs, refuses failure, empty execution or skipped suite files. Actual current-repo execution returned FocusedExit=0, FullExit=1, Success=false. No baseline-failure allowance. |
+| R4 | Check and update fail on failed git show, missing/ambiguous/disagreeing version fields, non-stable upstream grammar, invalid fork grammar or backwards base. No UNKNOWN/fallback release identity. Correct source + overview + OpenWrt PKG_VERSION are updated with exact identities. |
+| R5 | 34 production-path tests replace the 21 rejected toy tests. Temporary Git repos exercise the real entrypoint/integration, focused/full invocation, .cmd wrappers, dirty/divergence/conflicts/version/risk/T-008/skip/empty stops, each external gate, thrown/partial deploy, metadata/account/network/digest/smoke failures, rollback verification/failure, draft pause/exact resume and live backend command/inspection checks with mocked boundaries. |
+| R6 | Unique allowlisted final JSON distinguishes SUCCESS, DRAFT_READY_AWAITING_REVIEW, RELEASE_PUBLISHED_NAS_SKIPPED, STOPPED, ROLLED_BACK, ROLLBACK_FAILED. It includes old/new upstream, fork/tag, integration SHA, digest, observed previous/new NAS identity, final health and rollback status; unknown/unexecuted fields stay null/NOT_RUN. Arbitrary command/credential/error payloads are excluded. Actual fixture-generated samples are preserved with an explicit NOT_PRODUCTION label. |
+| R7 | README and NAS docs describe implemented behavior, X.Y.Z.N, plan-only dry-run, real test gating, human draft pause/resume, separately authorized NAS and recovery. Authoritative [operator guide](../../tools/README-upstream-sync.md) records parameters and operational limits. |
+| R8 | .ai/runtime/ is ignored. Repeated actual Check-Upstream.cmd runs and a subsequent updater probe leave git status identical. Clean synthetic check-followed-by-real-update reaches the external gates instead of self-blocking on audit files. |
+
+T-008 Compose and D-011 are preserved exactly. NAS verification checks both network memberships and only operates on wb-proxy; no OpenMAIC/Sub2API container operation is required.
+
+## Final verification
+
+- tests/_test_t007_upstream_sync.py: **34 tests, OK**, through the final full runner; [log](../runtime/tests/_test_t007_upstream_sync.py.log).
+- tests/_test_release_engineering.py: **8 tests, OK**, invoked by the real gate; [log](../runtime/tests/focused.log).
+- tests/run_all.py --jobs 4: **141 test files PASS / 1 FAIL / 0 test files skipped**; [full log](../runtime/tests/full.log), [failed test](../runtime/tests/_test_remaining_usage.py.log). Existing _test_pricing_tooltip.py reports one internal skipped case; runner file-count 0 skipped does not mean every internal test ran.
+- Failure: _test_remaining_usage.py::test_crossing_midnight_archives_the_finished_day, expected budget 2410, actual 2273. On an archive of untouched approved base 34154c4: **56 cases / 1 same failure**, also expected 2410 vs 2273; [base log](../runtime/review2-base/remaining-usage.log). No usage/product fix was imported.
+- Actual production test-gate helper under powershell.exe: **Success=false / FocusedExit=0 / FullExit=1**, with FULL_SUITE_GATE_BLOCKED; [replay harness](../runtime/review2-real-gate.ps1). Thus the current product baseline cannot be released automatically until a separately reviewed baseline fix/policy exists.
+- Actual .cmd path: Check-Upstream.cmd -NoFetch twice -> exit 0; Update-From-Upstream.cmd -DryRun -NoFetch -Force -> exit 1 at RISK; status unchanged. [Wrapper receipt](../runtime/review2-readonly/wrappers.json).
+- v1.7.3: upstream/main=c7dad8fe32316d47ce4f0ff260bb7ac7802b8a94, 30 commits, HIGH. Classic read-only merge-tree from the approved base reproduces README.md, wb_proxy.py and wrt/openwrt/workbuddy2api/Makefile conflicts. [Identity](../runtime/review2-readonly/identity.json) / [preflight](../runtime/review2-readonly/v173-merge-preflight.txt). No merge/ref advancement.
+- PowerShell 5.1 parser: 3/3 scripts clean. Python parser: executor + tests clean. git diff --check clean.
+- Product wb_*.py, dashboard, release workflows and deploy/nas/docker-compose.yml are identical to the approved base.
+- Read-only gh inspection verified a historical successful docker-publish.yml run uses event=release, exact tag head_branch and head_sha; run 38276925393. No release mutation.
+
+Durable [synthetic audit samples](../evidence/T-007-review2-samples.json) were copied from actual final test-generated reports (not handwritten successes). Local detailed samples remain in .ai/runtime/review2-final-evidence/. Fixture paths were temporary and are cleaned by the test harness.
+
+## Recovery verification — 2026-10-14
+
+This recovery invocation found the exact original T-007 worktree already clean at d60b8a60, after implementation b585d579 and the Review 2 handoff commit. It audited that live state instead of replaying the historical dirty-checkpoint instructions. Every artifact hash in the original final receipt matched before verification. Existing commits, checkpoint snapshots, durable audit samples and the original receipt were preserved; the replay harness refreshed its ignored test logs. No product-code change was needed during this invocation.
+
+- MyWC/WebCodex session: wc_sess_Qqj4JKasfXT2vcod; no subagent. Exact host model/effort/provider remains unknown.
+- Re-ran production-path regressions: **34/34 OK**; release engineering: **8/8 OK**.
+- Replayed the actual full test gate with powershell.exe: **Success=false, FocusedExit=0, FullExit=1** and FULL_SUITE_GATE_BLOCKED. Full runner: **141 test files passed / 1 failed / 0 skipped**; same remaining-usage failure, expected 2410 vs actual 2273. Existing untouched-base reproduction was preserved and its recorded hash verified; it was not re-executed in this invocation.
+- Re-ran Check-Upstream.cmd -NoFetch twice (exit 0/0) and Update-From-Upstream.cmd -DryRun -NoFetch -Force (exit 1 at RISK); HEAD and clean status unchanged. T-008 check passed.
+- PowerShell 5.1 parser: 3/3 clean. Repair diff from f8815153 passes git diff --check; protected product/dashboard/workflow/Compose paths remain identical to the approved base.
+- Read-only v1.7.3 merge-tree again shows the three documented conflicts; upstream/main remains c7dad8fe32316d47ce4f0ff260bb7ac7802b8a94. No integration, ref advancement or external mutation.
+
+Task status remains READY FOR REVIEW — Review 2. Independent Reviewer verdict is pending. The recovery receipt retains hashes of the refreshed logs and handoff; the original receipt is historical after the new verification logs were written.
+
+## External effects and remaining limits
+
+**NOT RUN:** real push, real release tag, GitHub Release creation/publication, GHCR publication, real NAS snapshot/deploy/restart/rollback, OpenMAIC changes, Sub2API changes, or v1.7.3 product integration. Regression fixtures make local commits/tags only in disposable repositories. Local T-007 code/document commits are the only maintained-repository mutations.
+
+Real external-operation code is implemented and unit/integration tested with injected boundaries, but a live GitHub/GHCR/NAS end-to-end trial is not established by these results. Preconditions (gh authentication, Docker buildx, batch SSH, exact reviewed data compatibility, NAS Compose ownership and tooling) are checked/fail closed; actual QNAP recovery reliability remains for a separately authorized trial.
+
+The existing full-suite failure remains a release-blocking baseline fact, not an implementation escape hatch. No blocker remains for submitting this repair to Review 2.
+
+## Reviewer verification entrypoints
+
+1. Read Task + Review 1, then inspect the original worktree diff from f8815153 and implementation commit b585d579.
+2. Run python tests/_test_t007_upstream_sync.py and python tests/_test_release_engineering.py.
+3. Run python tests/run_all.py --jobs 4; expect the documented baseline failure, not an overall green suite.
+4. Run Check-Upstream.cmd -NoFetch twice and Update-From-Upstream.cmd -DryRun -NoFetch -Force; inspect status and the risk stop. Do not pass live authorization switches for Review 2.
+5. Inspect samples and replay .ai/runtime/review2-real-gate.ps1 if desired; it writes ignored local evidence and asserts the full failure blocks release.
+6. Independently decide PASS / REVISE / DESIGN_CHANGE. Executor returns **READY FOR REVIEW — Review 2** only.

@@ -131,7 +131,7 @@ python tests/run_all.py            # 全部套件
 python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
-- 141 个套件：105 个 Python + 36 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- 142 个套件：106 个 Python + 36 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
 - CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12；推送 `v*` tag 时额外断言 **tag == 源码版本**（`-ci` 演练 tag 豁免）。
 
@@ -385,7 +385,22 @@ PR 贡献者（v1.4.5 之前的改动未进上方更新记录，这里一并列�
 
 ---
 
-## 八、免责声明 (Disclaimer)
+
+---
+
+## 八、上游同步与安全更新 (Upstream Sync & Safe Deployment)
+
+双击 **Check-Upstream.cmd** 可检查上游 SHA、风险、严格版本身份和 T-008 双网络。审计写入已忽略的本地目录，重复检查不会弄脏工作区。
+
+**Update-From-Upstream.cmd -DryRun -NoFetch** 仅检查并生成计划；不执行集成、测试、发布或 NAS 更新，也不会将这些未运行的门禁报告为通过。高风险变更必须先按精确上游 SHA 审核，旧的 -Force 不能绕过。
+
+实际更新在独立同步分支/worktree 中合并上游，更新两个源码版本和 OpenWrt PKG_VERSION 为 X.Y.Z.N，运行发布工程与完整套件。任何失败或整套测试文件跳过都停止发布，包括已知基线失败。发布和 NAS 操作各需明确授权；发布先停在 Draft Release，审核后按原审计记录续跑，再验证资产校验和、GHCR 双架构和不可变 digest。NAS 先停写快照，部署后检查健康、账号就绪、网络成员和鉴权 API；兼容性未确认则不部署，部署失败会恢复并验证之前的精确 tag/digest。
+
+操作参数、Draft 续跑与手动恢复见 [上游更新操作说明](tools/README-upstream-sync.md)。本轮验证采用临时 Git 仓库和注入的外部执行器；真实 GitHub/GHCR/NAS 整链试运行仍未执行。
+
+
+## 九、免责声明 (Disclaimer)
 
 1. 本项目为非官方自托管网关，仅供技术研究、逆向协议学习与个人合法授权账号在私有环境测试使用。
 2. 本项目不提供任何账号及额度。请严格遵守官方服务条款，禁止用于任何商业转售、恶意并发或违规滥用。
+
