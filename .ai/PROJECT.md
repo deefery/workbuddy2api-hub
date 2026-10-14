@@ -178,3 +178,13 @@ Status: BLOCKED — SUPERSEDED.
 - Prepared branch/worktree: `task/t011-v1731-release` / `C:\_AI\projects\.webcodex-worktrees\workbuddy2api-hub-t011-v1731-release`.
 - T-011 first promotes the accepted closeout to the maintained `custom/main` baseline, then uses the accepted T-007 pipeline. Gate A ends at verified Draft Release; Gate B resumes the same evidence for publication/GHCR/NAS cutover and rollback-on-failure.
 - Contract: `.ai/tasks/T-011.md`; handoff target: `.ai/handoffs/T-011.md`.
+### T-012 — Upstream v1.7.4-line HIGH-RISK integration
+
+Status: READY for Executor-hard local integration/review only.
+
+- Exact target: current reviewed `upstream/main` `b843ff3c67280ed1e7187dc669eca7637b354315`, source version `1.7.4`.
+- Provenance: stable `v1.7.4` tag `a979b0a37b26d28c82897cdc1b6282d2080ae95c` plus one post-tag catalog fix.
+- Delta from accepted v1.7.3 target: 25 commits, 23 files, approximately +2016/-141.
+- Read-only merge preflight reports only the three familiar semantic conflicts: `README.md`, `wb_proxy.py`, OpenWrt Makefile.
+- Integration only; no push/tag/Release/GHCR/NAS/public cutover. Expected later fork release after independent acceptance is `v1.7.4.1`.
+- Contract: `.ai/tasks/T-012.md`; handoff target: `.ai/handoffs/T-012.md`.
