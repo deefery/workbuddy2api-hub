@@ -11,7 +11,7 @@
 
 把腾讯 **[www.workbuddy.ai](https://www.workbuddy.ai)**（国际版）与 **[codebuddy.cn](https://www.codebuddy.cn)**（国内版）的原生服务封装成标准 OpenAI 兼容接口（Chat Completions / Responses）与原生 Anthropic Messages 接口，并补齐多账号调度与运维能力：
 
-- **开箱即用**：绿色包自带精简 Python，双击脚本即启；
+- **开箱即用**：绿色包自带精简 Python（Windows），双击脚本即启；
 - **双区域独立路由**：国际版 / 国内版各自配置与调度，看板一键切换，状态落盘；
 - **三协议**：Chat Completions、Responses API（Codex）、原生 Anthropic Messages（Claude Code / Anthropic SDK）；
 - **模型目录对齐官方桌面端**：剔除补全通道与专线变体，能力与规格按桌面端宣告，上游新模型无需发版即进 `/v1/models`；
@@ -131,7 +131,7 @@ python tests/run_all.py            # 全部套件
 python tests/run_all.py realm      # 只跑名字里含 realm 的
 ```
 
-- 142 个套件：106 个 Python + 36 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
+- 146 个套件：109 个 Python + 37 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。
 - `tests/_mobile_check.py` 是独立的 Playwright 手机/桌面布局检查器（需自行安装 Playwright），按需手动运行，不在上面的套件集里。
 - CI（`.github/workflows/tests.yml`）跑同一条命令：Ubuntu 上 python 3.9 与 3.12（3.9 是本项目声称的最低版本），Windows 上 python 3.12；推送 `v*` tag 时额外断言 **tag == 源码版本**（`-ci` 演练 tag 豁免）。
 
@@ -357,7 +357,8 @@ export ANTHROPIC_API_KEY="你在看板设置中添加并绑定的API_Key"
 
 ### Unreleased
 
-已发布版本的完整记录（v1.4.5 ~ v1.7.2，含每版的 PR 归属）见 **[docs/CHANGELOG.md](docs/CHANGELOG.md)**。
+已发布版本的完整记录（v1.4.5 ~ v1.7.3，含每版的 PR 归属）见 **[docs/CHANGELOG.md](docs/CHANGELOG.md)**。
+
 ## 七、致谢与引用声明 (Credits & References)
 
 协议兼容、风控规避与任务链路设计过程中，参考并吸纳了以下开源项目的经验与逆向成果：
