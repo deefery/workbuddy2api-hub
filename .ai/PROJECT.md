@@ -188,3 +188,6 @@ Status: PASS — Review 1 accepted; exact `b843ff3` 1.7.4-line local integration
 - Read-only merge preflight reports only the three familiar semantic conflicts: `README.md`, `wb_proxy.py`, OpenWrt Makefile.
 - Integration only; no push/tag/Release/GHCR/NAS/public cutover. Expected later fork release after independent acceptance is `v1.7.4.1`.
 - Contract: `.ai/tasks/T-012.md`; handoff target: `.ai/handoffs/T-012.md`.
+### T-013 — v1.7.4.1 Release & NAS Cutover
+
+Status: READY for local Phase 0 only. Accepted T-012 Review 1 is the release input. GitHub/GHCR/NAS mutations remain behind explicit Owner Gate A/B authorization. Production model-enumeration plus explicit Chat/Responses smoke is mandatory before final acceptance.
