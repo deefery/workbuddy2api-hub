@@ -16,8 +16,12 @@ services:
     networks:
       - default
       - sub2api
+      - mihomo-network
 
 networks:
+  mihomo-network:
+    external: true
+    name: mihomo-network
   sub2api:
     external: true
     name: sub2api_sub2api-network

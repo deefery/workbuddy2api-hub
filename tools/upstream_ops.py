@@ -19,7 +19,11 @@ IMAGE = "ghcr.io/deefery/workbuddy2api-hub"
 GITHUB_REPO = "deefery/workbuddy2api-hub"
 TAG_RE = re.compile(r"v\d+\.\d+\.\d+\.\d+")
 DIGEST_RE = re.compile(r"sha256:[a-f0-9]{64}")
-
+COMPOSE_CMD = "docker compose -f docker-compose.yml -f docker-compose.tunnel.yml"
+EXPECTED_WB_NETWORKS = {"workbuddy2api-hub_default", "sub2api_sub2api-network", "mihomo-network", "workbuddy2api-hub_publication"}
+EXPECTED_COMPOSE_WB_NETWORKS = {"default", "sub2api", "mihomo-network", "publication"}
+PUBLICATION_NETWORK = "workbuddy2api-hub_publication"
+PUBLIC_API_URL = "https://wbapi.zhijic.com/v1/models"
 
 class ExternalGateError(RuntimeError):
     def __init__(self, reason, message=None):
@@ -157,13 +161,55 @@ if not keys: raise SystemExit(1)
 req=urllib.request.Request('http://127.0.0.1:8788/v1/models',headers={'Authorization':'Bearer '+keys[0]['key']})
 d=json.load(urllib.request.urlopen(req,timeout=30))
 if not isinstance(d.get('data'),list) or not d['data']: raise SystemExit(1)
-# Prove authentication is enforced, not accidentally anonymous.
 try: urllib.request.urlopen('http://127.0.0.1:8788/v1/models',timeout=15)
 except urllib.error.HTTPError as e:
     if e.code!=401: raise
 else: raise SystemExit(1)
 print('smoke-ok')
 """
+PUBLICATION_PROBE_CODE = """import urllib.request,urllib.error
+try:
+    urllib.request.urlopen('http://wb-proxy:8788/v1/models',timeout=15)
+except urllib.error.HTTPError as e:
+    if e.code!=401: raise
+    print('publication-ok')
+else:
+    raise SystemExit(1)
+"""
+PUBLIC_SMOKE_CODE = """import json,sys,urllib.request,urllib.error
+sys.path.insert(0,'/app')
+import wb_settings
+keys=[k for k in wb_settings.api_keys('/app/accounts') if k.get('enabled') and k.get('key')]
+if not keys:
+    print(json.dumps({'status':'missing-key'})); raise SystemExit(0)
+req=urllib.request.Request('https://wbapi.zhijic.com/v1/models',headers={'Authorization':'Bearer '+keys[0]['key'],'Accept':'application/json'})
+try:
+    with urllib.request.urlopen(req,timeout=30) as r:
+        body=r.read()
+        try: d=json.loads(body.decode('utf-8'))
+        except Exception: d=None
+        if r.status==200 and isinstance(d,dict) and isinstance(d.get('data'),list) and d['data']:
+            print(json.dumps({'status':'ok','models':len(d['data'])})); raise SystemExit(0)
+        print(json.dumps({'status':'invalid-response'})); raise SystemExit(0)
+except urllib.error.HTTPError as e:
+    print(json.dumps({'status':'external-policy-blocked' if e.code==403 else 'http-error','code':e.code})); raise SystemExit(0)
+except Exception:
+    print(json.dumps({'status':'request-failed'})); raise SystemExit(0)
+"""
+
+def remote_compose_contract(c):
+    raw = ssh(c, "test -f docker-compose.yml && test -f docker-compose.tunnel.yml && " + COMPOSE_CMD + " config --format json\n",
+              reason="NAS_PREFLIGHT_FAILURE")
+    try:
+        cfg = json.loads(raw)
+        services = cfg.get("services", {})
+        wb_networks = set((services.get("wb-proxy", {}).get("networks") or {}).keys())
+        cf_networks = set((services.get("cloudflared", {}).get("networks") or {}).keys())
+    except Exception as e:
+        raise ExternalGateError("NAS_PREFLIGHT_FAILURE", "Merged NAS compose configuration is invalid") from e
+    if not EXPECTED_COMPOSE_WB_NETWORKS <= wb_networks or cf_networks != {"publication"}:
+        raise ExternalGateError("NAS_PREFLIGHT_FAILURE", "Merged NAS compose network contract is incomplete")
+    return True
 
 
 def health(c, expected):
@@ -172,9 +218,21 @@ def health(c, expected):
         raise RuntimeError("Container unhealthy")
     if info["Config"]["Labels"].get("com.docker.compose.project") != "workbuddy2api-hub":
         raise RuntimeError("Unexpected Compose owner")
-    networks = info["NetworkSettings"]["Networks"]
-    if not {"workbuddy2api-hub_default", "sub2api_sub2api-network"} <= set(networks):
-        raise RuntimeError("Dual-network membership lost")
+    networks = set(info["NetworkSettings"]["Networks"])
+    if not EXPECTED_WB_NETWORKS <= networks:
+        raise RuntimeError("Required NAS network membership lost")
+    mounts = {m.get("Destination"): m for m in info.get("Mounts", [])}
+    for destination, suffix in (("/app/accounts", "/data/accounts"), ("/app/usage", "/data/usage")):
+        m = mounts.get(destination)
+        if not m or m.get("Type") != "bind" or not str(m.get("Source", "")).replace("\\", "/").endswith(suffix):
+            raise RuntimeError("Persistent mount contract lost")
+    cf_id = ssh(c, "docker ps -aq --filter label=com.docker.compose.project=workbuddy2api-hub --filter label=com.docker.compose.service=cloudflared | head -n 1\n",
+                reason="REMOTE_HEALTH_VERIFY_FAILURE").strip()
+    if not re.fullmatch(r"[a-f0-9]{12,64}", cf_id):
+        raise RuntimeError("cloudflared container missing")
+    cf_info = json.loads(ssh(c, "docker inspect " + shlex.quote(cf_id) + "\n", reason="REMOTE_HEALTH_VERIFY_FAILURE"))[0]
+    if set(cf_info["NetworkSettings"]["Networks"]) != {PUBLICATION_NETWORK}:
+        raise RuntimeError("cloudflared publication-only network contract lost")
     image = json.loads(ssh(c, "docker image inspect " + shlex.quote(info["Image"]) + "\n", reason="REMOTE_HEALTH_VERIFY_FAILURE"))[0]
     if f"{IMAGE}@{expected}" not in image.get("RepoDigests", []):
         raise RuntimeError("Container RepoDigest mismatch")
@@ -184,8 +242,8 @@ def health(c, expected):
     status = json.loads(ssh(c, "docker exec wb-proxy python -c " + shlex.quote(HEALTH_CODE) + "\n", reason="REMOTE_HEALTH_VERIFY_FAILURE"))
     if status["AccountsReady"] < c.get("AccountsReady", 1) or not status["KeyRequired"]:
         raise RuntimeError("Account/auth readiness lost")
-    return {"Healthy": True, "NetworkOk": True, "AccountsReady": status["AccountsReady"],
-            "Digest": expected}
+    return {"Healthy": True, "NetworkOk": True, "TunnelNetworkOk": True, "MountsOk": True,
+            "AccountsReady": status["AccountsReady"], "Digest": expected}
 
 
 def await_health(c, expected):
@@ -194,7 +252,7 @@ def await_health(c, expected):
             return health(c, expected)
         except RuntimeError:
             time.sleep(5)
-    raise RuntimeError("Health/digest/account verification timed out")
+    raise RuntimeError("Health/digest/account/network verification timed out")
 
 
 def smoke(c):
@@ -203,27 +261,54 @@ def smoke(c):
     return True
 
 
+def publication_smoke(c):
+    image_ref = ssh(c, "docker inspect -f '{{.Config.Image}}' wb-proxy\n", reason="PUBLICATION_SMOKE_FAILURE").strip()
+    if not image_ref.startswith(IMAGE + ":"):
+        raise ExternalGateError("PUBLICATION_SMOKE_FAILURE", "Unexpected wb-proxy image reference")
+    cmd = ("docker run --rm --pull never --network " + shlex.quote(PUBLICATION_NETWORK) +
+           " --entrypoint python " + shlex.quote(image_ref) + " -c " + shlex.quote(PUBLICATION_PROBE_CODE) + "\n")
+    if ssh(c, cmd, reason="PUBLICATION_SMOKE_FAILURE").strip() != "publication-ok":
+        raise ExternalGateError("PUBLICATION_SMOKE_FAILURE", "Publication network DNS/HTTP probe failed")
+    return True
+
+
+def public_api_smoke(c):
+    raw = ssh(c, "docker exec wb-proxy python -c " + shlex.quote(PUBLIC_SMOKE_CODE) + "\n",
+              reason="PUBLIC_API_SMOKE_FAILURE")
+    try:
+        result = json.loads(raw)
+    except Exception as e:
+        raise ExternalGateError("PUBLIC_API_SMOKE_FAILURE", "Public API probe returned invalid status") from e
+    status = result.get("status")
+    if status == "ok" and int(result.get("models", 0)) > 0:
+        return {"Verified": True, "Status": "PASS"}
+    if status == "external-policy-blocked":
+        return {"Verified": False, "Status": "EXTERNAL_POLICY_BLOCKED"}
+    return {"Verified": False, "Status": str(status or "FAILED").upper().replace("-", "_")}
+
+
 def deploy(c, tag, digest, *, reason="NAS_DEPLOY_FAILURE"):
     if not TAG_RE.fullmatch(tag) or not DIGEST_RE.fullmatch(digest):
         raise RuntimeError("Invalid exact deployment identity")
-    # Keep the Compose expression/persistent mounts unchanged; replace one exact env field.
     script = r"""
 umask 077
 test -d .t007-update-lock
 test "$(grep -c '^WB_IMAGE_TAG=' .env)" = 1
+test -f docker-compose.yml
+test -f docker-compose.tunnel.yml
 docker pull IMAGE_DIGEST >/dev/null 2>&1
 docker tag IMAGE_DIGEST TARGET_IMAGE
 sed 's/^WB_IMAGE_TAG=.*/WB_IMAGE_TAG=TAG/' .env > .env.t007
 chmod 600 .env.t007
 mv .env.t007 .env
-docker compose config -q >/dev/null 2>&1
-docker compose up -d --no-deps --pull never wb-proxy >/dev/null 2>&1
+COMPOSE config -q >/dev/null 2>&1
+COMPOSE up -d --no-deps --pull never wb-proxy >/dev/null 2>&1
 """
     script = script.replace("IMAGE_DIGEST", shlex.quote(f"{IMAGE}@{digest}"))
     script = script.replace("TARGET_IMAGE", shlex.quote(f"{IMAGE}:{tag}"))
     script = script.replace("=TAG", "=" + tag)
+    script = script.replace("COMPOSE", COMPOSE_CMD)
     ssh(c, script, reason=reason)
-
 
 
 def remote_push_state(c):
@@ -441,9 +526,9 @@ def execute(action, c):
             raise RuntimeError("Published release missing")
         return verify_ghcr_image(c)
     if action == "NAS_PREFLIGHT_AND_SNAPSHOT":
-        # Docker/compose capability check before snapshot. Classify this separately from generic SSH failures.
         ssh(c, "docker --version >/dev/null 2>&1 && docker compose version >/dev/null 2>&1\n",
             reason="REMOTE_DOCKER_CAPABILITY_FAILURE")
+        remote_compose_contract(c)
         previous = ssh(c, "sed -n 's/^WB_IMAGE_TAG=//p' .env\n", reason="NAS_PREFLIGHT_FAILURE").strip()
         if not TAG_RE.fullmatch(previous):
             raise RuntimeError("Previous tag unresolved")
@@ -454,6 +539,7 @@ def execute(action, c):
             raise RuntimeError("Previous image identity unresolved")
         baseline = health(c, digests[0])
         smoke(c)
+        publication_smoke(c)
         snapshot = "backups/t007-" + c["NewTag"] + "-" + str(time.time_ns())
         ssh(c, r"""
 umask 077
@@ -462,17 +548,17 @@ snapshot=SNAPSHOT
 resume() { docker start wb-proxy >/dev/null 2>&1 || return 1; }
 trap 'resume; rmdir .t007-update-lock' 0 1 2 3 15
 docker stop wb-proxy >/dev/null 2>&1
-if ! (mkdir "$snapshot" && cp -p .env docker-compose.yml "$snapshot/" &&
+if ! (mkdir "$snapshot" && cp -p .env docker-compose.yml docker-compose.tunnel.yml "$snapshot/" &&
       tar -cf "$snapshot/state.tar" data/accounts data/usage &&
       tar -tf "$snapshot/state.tar" >/dev/null &&
-      sha256sum "$snapshot/.env" "$snapshot/docker-compose.yml" "$snapshot/state.tar" > "$snapshot/SHA256SUMS"); then
+      sha256sum "$snapshot/.env" "$snapshot/docker-compose.yml" "$snapshot/docker-compose.tunnel.yml" "$snapshot/state.tar" > "$snapshot/SHA256SUMS"); then
   resume; rmdir .t007-update-lock; exit 1
 fi
 resume
 trap - 0 1 2 3 15
 """.replace("SNAPSHOT", shlex.quote(snapshot)), reason="NAS_SNAPSHOT_FAILURE")
         await_health(c, digests[0])
-        # Snapshot succeeded and the prior container was resumed; retain lock until final smoke/rollback.
+        publication_smoke(c)
         return {"Success": True, "PreviousTag": previous, "PreviousDigest": digests[0],
                 "SnapshotPath": c["NasDirectory"] + "/" + snapshot, "AccountsReady": baseline["AccountsReady"]}
     if action == "NAS_DEPLOY_TAG":
@@ -488,8 +574,11 @@ trap - 0 1 2 3 15
     if action == "NAS_AUTHENTICATED_SMOKE":
         try:
             smoke(c)
+            publication_smoke(c)
+            public = public_api_smoke(c)
             ssh(c, "rmdir .t007-update-lock\n", reason="AUTHENTICATED_SMOKE_FAILURE")
-            return {"Success": True, "SmokePassed": True}
+            return {"Success": True, "SmokePassed": True, "PublicationSmokePassed": True,
+                    "PublicVerified": public["Verified"], "PublicStatus": public["Status"]}
         except ExternalGateError:
             raise
         except Exception as e:
@@ -499,8 +588,12 @@ trap - 0 1 2 3 15
             deploy(c, c["PreviousTag"], c["PreviousDigest"], reason="NAS_ROLLBACK_FAILURE")
             status = await_health(c, c["PreviousDigest"])
             smoke(c)
+            publication_smoke(c)
+            public = public_api_smoke(c)
             ssh(c, "rmdir .t007-update-lock\n", reason="NAS_ROLLBACK_FAILURE")
-            return {"Success": True, "RestoredTag": c["PreviousTag"], "SmokePassed": True, **status}
+            return {"Success": True, "RestoredTag": c["PreviousTag"], "SmokePassed": True,
+                    "PublicationSmokePassed": True, "PublicVerified": public["Verified"],
+                    "PublicStatus": public["Status"], **status}
         except ExternalGateError as e:
             if e.reason == "NAS_ROLLBACK_FAILURE":
                 raise

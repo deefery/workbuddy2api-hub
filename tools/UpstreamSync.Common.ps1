@@ -235,14 +235,20 @@ function Update-ReleaseIdentityFiles {
 }
 function Test-T008DualNetworkConfig {
     param([string]$Repo)
-    $path = Join-Path $Repo 'deploy/nas/docker-compose.yml'
-    if (-not (Test-Path $path)) { return [PSCustomObject]@{ IsValid = $false; Reason = 'Compose missing' } }
-    $c = Get-Content -LiteralPath $path -Raw -Encoding UTF8
-    $valid = $c -match '(?ms)^services:\s*\r?\n  wb-proxy:\s*\r?\n(?:(?!^  \S|^networks:).)*?    networks:\s*\r?\n      - default\s*\r?\n      - sub2api(?:\s*\r?\n|$)' -and
-        $c -match '(?m)^networks:\s*\r?\n  sub2api:\s*\r?\n    external: true\s*\r?\n    name: sub2api_sub2api-network\s*$'
-    [PSCustomObject]@{ IsValid = [bool]$valid; Reason = 'Requires wb-proxy default + external sub2api network' }
-}
-function Get-SyncPython {
+    $base = Join-Path $Repo 'deploy/nas/docker-compose.yml'
+    $tunnel = Join-Path $Repo 'deploy/nas/docker-compose.tunnel.yml'
+    if (-not (Test-Path $base) -or -not (Test-Path $tunnel)) {
+        return [PSCustomObject]@{ IsValid = $false; Reason = 'NAS compose pair missing' }
+    }
+    $c = Get-Content -LiteralPath $base -Raw -Encoding UTF8
+    $t = Get-Content -LiteralPath $tunnel -Raw -Encoding UTF8
+    $valid = $c -match '(?ms)^services:\s*\r?\n  wb-proxy:\s*\r?\n(?:(?!^  \S|^networks:).)*?    networks:\s*\r?\n      - default\s*\r?\n      - sub2api\s*\r?\n      - mihomo-network(?:\s*\r?\n|$)' -and
+        $c -match '(?ms)^networks:\s*\r?\n  mihomo-network:\s*\r?\n    external: true\s*\r?\n    name: mihomo-network\s*\r?\n  sub2api:\s*\r?\n    external: true\s*\r?\n    name: sub2api_sub2api-network\s*$' -and
+        $t -match '(?ms)^services:\s*\r?\n  wb-proxy:\s*\r?\n    networks:\s*\r?\n      - publication' -and
+        $t -match '(?ms)^  cloudflared:.*?    networks:\s*\r?\n      - publication' -and
+        $t -match '(?ms)^networks:\s*\r?\n  publication:\s*\r?\n    driver: bridge'
+    [PSCustomObject]@{ IsValid = [bool]$valid; Reason = 'Requires NAS compose pair with wb-proxy default/sub2api/mihomo/publication and cloudflared publication-only' }
+}function Get-SyncPython {
     param([string]$PythonExe)
     if ($PythonExe) { return $PythonExe }
     if ($env:WB_SYNC_PYTHON) { return $env:WB_SYNC_PYTHON }
@@ -322,25 +328,30 @@ function Invoke-ProductionGates {
         $Evidence.previous_nas_tag = $r.PreviousTag; $Evidence.previous_nas_digest = $r.PreviousDigest
         $Evidence.snapshot_path = $r.SnapshotPath
         $mutation = $true
-        $Evidence.mutates_nas = $true; $Evidence.new_nas_tag = $Context.NewTag; $Evidence.final_health = 'UNKNOWN'
+        $publicUnverified = $false
         foreach ($action in @('NAS_DEPLOY_TAG', 'NAS_VERIFY', 'NAS_AUTHENTICATED_SMOKE')) {
             $Evidence.last_gate = $action
             $r = & $executor $action $Context
             if (-not $r.Success) { throw "STOP: $action failed" }
-            if ($action -eq 'NAS_VERIFY' -and (-not $r.Healthy -or -not $r.NetworkOk -or
-                $r.AccountsReady -lt $Context.AccountsReady -or $r.Digest -cne $Context.Digest)) { throw 'STOP: NAS health/accounts/network/digest failed' }
-            if ($action -eq 'NAS_AUTHENTICATED_SMOKE' -and -not $r.SmokePassed) { throw 'STOP: Authenticated API smoke failed' }
+            if ($action -eq 'NAS_VERIFY' -and (-not $r.Healthy -or -not $r.NetworkOk -or -not $r.TunnelNetworkOk -or -not $r.MountsOk -or
+                $r.AccountsReady -lt $Context.AccountsReady -or $r.Digest -cne $Context.Digest)) { throw 'STOP: NAS health/accounts/network/mount/digest failed' }
+            if ($action -eq 'NAS_AUTHENTICATED_SMOKE') {
+                if (-not $r.SmokePassed -or -not $r.PublicationSmokePassed) { throw 'STOP: Internal/publication API smoke failed' }
+                $Evidence.public_api_status = $r.PublicStatus
+                if (-not $r.PublicVerified) { $publicUnverified = $true }
+            }
         }
-        $Evidence.new_nas_tag = $Context.NewTag; $Evidence.final_health = 'HEALTHY'; $Evidence.status = 'SUCCESS'
+        $Evidence.new_nas_tag = $Context.NewTag; $Evidence.final_health = 'HEALTHY'
+        $Evidence.status = if ($publicUnverified) { 'PUBLIC_UNVERIFIED' } else { 'SUCCESS' }
     } catch {
         if ($mutation) {
             $Evidence.rollback_status = 'ATTEMPTED'
             try {
                 $rb = & $executor 'NAS_ROLLBACK' $Context
-                if (-not $rb.Success -or -not $rb.Healthy -or -not $rb.SmokePassed -or -not $rb.NetworkOk -or
+                if (-not $rb.Success -or -not $rb.Healthy -or -not $rb.SmokePassed -or -not $rb.PublicationSmokePassed -or
+                    -not $rb.NetworkOk -or -not $rb.TunnelNetworkOk -or -not $rb.MountsOk -or
                     $rb.RestoredTag -cne $Context.PreviousTag -or $rb.Digest -cne $Context.PreviousDigest -or
-                    $rb.AccountsReady -lt $Context.AccountsReady) { throw 'Rollback verification failed' }
-                $Evidence.rollback_status = 'VERIFIED'; $Evidence.final_health = 'HEALTHY_PREVIOUS'; $Evidence.status = 'ROLLED_BACK'
+                    $rb.AccountsReady -lt $Context.AccountsReady) { throw 'Rollback verification failed' }                $Evidence.rollback_status = 'VERIFIED'; $Evidence.final_health = 'HEALTHY_PREVIOUS'; $Evidence.status = 'ROLLED_BACK'
             } catch {
                 $Evidence.rollback_status = 'FAILED_REQUIRES_MANUAL_RECOVERY'; $Evidence.final_health = 'UNKNOWN'; $Evidence.status = 'ROLLBACK_FAILED'
             }
@@ -356,7 +367,7 @@ function Write-SyncAuditEvidence {
         'upstream_version','current_fork_version','fork_version','fork_tag','ghcr_digest','previous_nas_tag','new_nas_tag',
         'previous_nas_digest','final_health','rollback_status','snapshot_path','integration_path','integration_branch',
         'integration_sha','workspace_clean','has_update','risk_level','t008_dual_network','focused_exit','full_exit',
-        'test_logs','mutates_nas','publishes_release','git_push_status','old_main_sha','old_custom_sha')
+        'test_logs','mutates_nas','publishes_release','git_push_status','old_main_sha','old_custom_sha','public_api_status')
     $safe = @{}
     foreach ($key in $allowed) { if ($EvidenceData.ContainsKey($key)) { $safe[$key] = $EvidenceData[$key] } }
     $path = Join-Path $dir ("sync-$($EvidenceData.mode)-$([guid]::NewGuid().ToString('N')).json")

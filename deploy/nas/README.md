@@ -35,18 +35,17 @@ The release workflow also attempts Docker Hub only when the repository secrets `
 
 ## First NAS deployment
 
-Choose a stable NAS directory for the deployment files. In that directory:
+Choose a stable NAS directory for the deployment files. The NAS deployment contract always loads the base file and the tunnel override together, in this order:
 
 ```sh
 cp .env.example .env
 # Edit .env and set WB_IMAGE_TAG to an image tag that is already present in GHCR.
 mkdir -p data/accounts data/usage
 
-docker compose config
-docker compose pull
-docker compose up -d
+docker compose -f docker-compose.yml -f docker-compose.tunnel.yml config
+docker compose -f docker-compose.yml -f docker-compose.tunnel.yml pull
+docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d
 ```
-
 The container runs in LAN mode. If no API key is already persisted, the application generates one and stores it under `data/accounts` through the `/app/accounts` mount. Inspect startup logs according to the application README to obtain the initial generated key. Do not copy that key into Git.
 
 ## Verification
@@ -54,52 +53,52 @@ The container runs in LAN mode. If no API key is already persisted, the applicat
 After deployment:
 
 ```sh
-docker compose ps
-docker compose logs --tail=100 wb-proxy
+docker compose -f docker-compose.yml -f docker-compose.tunnel.yml ps
+docker compose -f docker-compose.yml -f docker-compose.tunnel.yml logs --tail=100 wb-proxy
 ```
 
-The image's Dockerfile supplies the `/health` health check. Wait until the container reports `healthy` before treating the deployment as complete. Then verify the Web UI and `/v1` from an intended LAN client.
+Do not treat container `healthy` or the internal loopback API as complete acceptance. The NAS production contract requires:
 
-Also verify that host files exist under:
+- `wb-proxy` remains attached to `workbuddy2api-hub_default`, `sub2api_sub2api-network`, `mihomo-network`, and `workbuddy2api-hub_publication`;
+- the Compose-managed `cloudflared` service remains attached only to `workbuddy2api-hub_publication`;
+- `/app/accounts` and `/app/usage` remain bind-mounted from the NAS deployment directory;
+- DNS and HTTP to `wb-proxy:8788` work from the publication network;
+- the public `https://wbapi.zhijic.com/v1/models` path returns a non-empty authenticated model list when external policy permits the probe.
 
-- `data/accounts/`
-- `data/usage/`
-
-These directories are the persistent state boundary and must survive container replacement.
-
+A `403`, login page, empty body, or unparsed response is not public success. If an external Cloudflare policy prevents the public probe while the application/topology checks are healthy, record public verification as unverified rather than rolling back the healthy application solely for that policy result.
 ## Upgrade
 
 1. Publish and verify the new fork image first.
-2. Record the currently deployed `WB_IMAGE_TAG`.
-3. Change only `WB_IMAGE_TAG` in `.env` to the new published tag.
-4. Run:
+2. Preflight the **merged two-file Compose configuration** and the four-network contract before any container mutation.
+3. Record the currently deployed `WB_IMAGE_TAG`, image digest, both Compose files, and persistent state in the recovery snapshot.
+4. Change only `WB_IMAGE_TAG` in `.env` to the new published tag.
+5. Run the same complete Compose pair:
 
 ```sh
-docker compose config
-docker compose pull
-docker compose up -d
+docker compose -f docker-compose.yml -f docker-compose.tunnel.yml config
+docker compose -f docker-compose.yml -f docker-compose.tunnel.yml pull
+docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d --no-deps wb-proxy
 ```
 
-5. Wait for `healthy` and verify UI/API behavior before considering the upgrade complete.
+6. Verify image identity, mounts, accounts, all four Hub networks, publication-network DNS/HTTP, and the authenticated public API before reporting complete success.
 
 Do not use automatic Watchtower upgrades for this production deployment unless a later decision explicitly changes the pinned-release policy.
-
 ## Rollback
 
-Rollback does not require restoring the persistent directories unless a future application migration explicitly says otherwise.
+Rollback uses the **same two-file Compose entry point** as upgrade. Reverting only the image is insufficient if the network topology was lost.
 
 1. Set `WB_IMAGE_TAG` in `.env` back to the previously verified tag.
 2. Run:
 
 ```sh
-docker compose pull
-docker compose up -d
+docker compose -f docker-compose.yml -f docker-compose.tunnel.yml config
+docker compose -f docker-compose.yml -f docker-compose.tunnel.yml pull
+docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d --no-deps wb-proxy
 ```
 
-3. Wait for `healthy`, then verify UI/API behavior.
+3. Re-run the same four-network, mount, account, publication-network and API verification used after upgrade.
 
 Because `data/accounts` and `data/usage` are host mounts, replacing the image does not remove them. Before any future release that changes persistent-data format, add a release-specific migration/rollback decision instead of assuming image-only rollback is sufficient.
-
 ## Secrets and local files
 
 - `.env` is local deployment state and is ignored by Git.
@@ -111,11 +110,11 @@ Because `data/accounts` and `data/usage` are host mounts, replacing the image do
 
 See [operator instructions](../../tools/README-upstream-sync.md) for the authoritative parameters and recovery procedure.
 
-- Check-Upstream.cmd inspects drift, strict identity and T-008 membership.
-- Update-From-Upstream.cmd -DryRun plans only; integration/tests/external gates are NOT RUN.
-- Actual local staging merges in an isolated integration worktree and runs focused + full tests. Any failure (including a known baseline failure) or skipped suite file blocks release.
-- Explicitly authorized release staging pushes the exact tested SHA/tag and verifies the CI-created draft/assets. It pauses for human draft review; the original evidence file is the continuation entry.
-- NAS authorization is separate. Unknown state compatibility stops before NAS access. Snapshot includes .env, Compose, accounts and usage while wb-proxy is stopped, then resumes the previous container.
-- Deployment pulls the verified immutable digest, assigns the exact tag, changes only WB_IMAGE_TAG and recreates wb-proxy. It checks health, previous account-ready count, both Docker networks and an authenticated /v1/models request.
-- Failure after deployment attempts rollback to the observed previous tag/digest and verifies health/accounts/network/auth again. A failed rollback records manual recovery required.
-- These paths are tested locally with injected boundaries. A real GitHub/GHCR/NAS update has not been performed for T-007 Review 2.
+- `Check-Upstream.cmd` inspects drift, strict identity and the approved NAS Compose/network contract.
+- `Update-From-Upstream.cmd -DryRun` plans only; integration/tests/external gates are NOT RUN.
+- Actual local staging merges in an isolated integration worktree and runs focused + full tests. Any failure or skipped suite file blocks release.
+- Explicitly authorized release staging pushes the exact tested SHA/tag and verifies the CI-created draft/assets.
+- NAS preflight requires both `docker-compose.yml` and `docker-compose.tunnel.yml`, validates their merged topology, then snapshots `.env`, both Compose files, accounts and usage before deployment.
+- Deployment and rollback use the same two-file Compose command. They require the four Hub networks, publication-only cloudflared, persistent mounts, account readiness and exact image digest/revision.
+- Acceptance includes internal authenticated `/v1/models`, a publication-network DNS/HTTP probe, and an authenticated `https://wbapi.zhijic.com/v1/models` content check. External-policy blocking is recorded as `PUBLIC_UNVERIFIED`, never as full success and never as a reason by itself to blindly roll back a healthy application.
+- Failures after application mutation still use the verified rollback path; rollback is accepted only if the full topology/mount/account/publication contract is restored.

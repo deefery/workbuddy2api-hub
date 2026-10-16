@@ -1,5 +1,6 @@
 """Production-path T-007 regressions using isolated Git repos and injected boundaries."""
 import importlib.util
+import copy
 import json
 import hashlib
 import urllib.error
@@ -62,6 +63,7 @@ class PipelineTests(unittest.TestCase):
         compose = self.repo / "deploy/nas"
         compose.mkdir(parents=True)
         shutil.copy2(ROOT / "deploy/nas/docker-compose.yml", compose / "docker-compose.yml")
+        shutil.copy2(ROOT / "deploy/nas/docker-compose.tunnel.yml", compose / "docker-compose.tunnel.yml")
         suite = self.repo / "tests"
         suite.mkdir()
         (suite / "_test_release_engineering.py").write_text(
@@ -129,7 +131,8 @@ $mock = {
  }
  $r = @{Success=$true;Draft=$true;AssetsVerified=$true;PreflightPassed=$true;Published=$true;MultiArch=$true;Digest=DIGEST;
        PreviousDigest=PREVIOUS;PreviousTag='v1.7.2.9';SnapshotPath='/fixture/snapshot';AccountsReady=3;
-       Healthy=$true;NetworkOk=$true;SmokePassed=$true;RestoredTag='v1.7.2.9'}
+       Healthy=$true;NetworkOk=$true;TunnelNetworkOk=$true;MountsOk=$true;SmokePassed=$true;PublicationSmokePassed=$true;
+       PublicVerified=$true;PublicStatus='PASS';RestoredTag='v1.7.2.9'}
  if ($Action -eq 'NAS_ROLLBACK') { $r.Digest=PREVIOUS }
  MUTATION
  return $r
@@ -247,9 +250,24 @@ $mock = {
 
     def test_t008_missing_service_membership_stops(self):
         path = "deploy/nas/docker-compose.yml"
-        self.commit_custom_change(path, (self.repo / path).read_text().replace("      - sub2api", "      - other"))
+        self.commit_custom_change(path, (self.repo / path).read_text().replace("      - mihomo-network", "      - other"))
         self.assertNotEqual(self.update()[0], 0)
         self.assertEqual(self.evidence()["last_gate"], "T008")
+
+    def test_tunnel_compose_missing_publication_stops(self):
+        path = "deploy/nas/docker-compose.tunnel.yml"
+        self.commit_custom_change(path, (self.repo / path).read_text().replace("      - publication", "      - other", 1))
+        self.assertNotEqual(self.update()[0], 0)
+        self.assertEqual(self.evidence()["last_gate"], "T008")
+    def test_public_policy_block_does_not_report_success_or_rollback(self):
+        if self.trace.exists(): self.trace.unlink()
+        rc, out = self.update(mutate="if ($Action -eq 'NAS_AUTHENTICATED_SMOKE') { $r.PublicVerified=$false; $r.PublicStatus='EXTERNAL_POLICY_BLOCKED' }")
+        self.assertEqual(rc, 0, out)
+        e = self.evidence()
+        self.assertEqual(e["status"], "PUBLIC_UNVERIFIED")
+        self.assertEqual(e["public_api_status"], "EXTERNAL_POLICY_BLOCKED")
+        self.assertEqual(e["rollback_status"], "NOT_NEEDED")
+        self.assertNotIn("NAS_ROLLBACK", self.actions())
 
     def test_each_external_failure_blocks_later_effects_or_rolls_back(self):
         order = ["GIT_PUSH", "DRAFT_RELEASE_VERIFY", "GHCR_CAPABILITY_PREFLIGHT", "RELEASE_PUBLISH", "GHCR_VERIFY",
@@ -268,7 +286,7 @@ $mock = {
                 self.assertNotIn("sk-secret-canary", json.dumps(e))
 
     def test_postdeploy_fields_are_enforced(self):
-        for field, value in [("Healthy", "$false"), ("NetworkOk", "$false"),
+        for field, value in [("Healthy", "$false"), ("NetworkOk", "$false"), ("TunnelNetworkOk", "$false"), ("MountsOk", "$false"),
                              ("AccountsReady", "2"), ("Digest", quote(PREVIOUS))]:
             with self.subTest(field=field):
                 if self.trace.exists(): self.trace.unlink()
@@ -564,32 +582,35 @@ class LiveBoundaryTests(unittest.TestCase):
         c = self.context(); c["NasDirectory"] = "/fixture"
         inspect = [{"Image": "img-id", "Config": {"Image": OPS.IMAGE + ":v1.7.2.9"}}]
         image = [{"RepoDigests": [OPS.IMAGE + "@" + PREVIOUS]}]
+        merged = {"services": {"wb-proxy": {"networks": {"default": {}, "sub2api": {}, "mihomo-network": {}, "publication": {}}},
+                               "cloudflared": {"networks": {"publication": {}}}}}
         def ssh(ctx, script, **kwargs):
             if "docker --version" in script: return ""
+            if "config --format json" in script: return json.dumps(merged)
             if script.startswith("sed"): return "v1.7.2.9\n"
             if script.startswith("docker inspect"): return json.dumps(inspect)
             if script.startswith("docker image inspect"): return json.dumps(image)
             self.assertIn("docker stop wb-proxy", script)
-            self.assertIn("cp -p .env docker-compose.yml", script)
+            self.assertIn("cp -p .env docker-compose.yml docker-compose.tunnel.yml", script)
             self.assertIn("data/accounts data/usage", script)
             self.assertIn("trap 'resume; rmdir .t007-update-lock' 0", script)
+            self.assertIn("docker-compose.tunnel.yml", script)
             self.assertIn("sha256sum", script)
             self.assertIn("docker start wb-proxy", script)
             return ""
-        with patch.object(OPS, "ssh", side_effect=ssh), patch.object(OPS, "health", return_value={"AccountsReady": 3}), patch.object(OPS, "smoke", return_value=True):
+        with patch.object(OPS, "ssh", side_effect=ssh), patch.object(OPS, "health", return_value={"AccountsReady": 3}), patch.object(OPS, "smoke", return_value=True), patch.object(OPS, "publication_smoke", return_value=True):
             r = OPS.execute("NAS_PREFLIGHT_AND_SNAPSHOT", c)
             self.assertEqual(r["PreviousTag"], "v1.7.2.9")
             self.assertEqual(r["PreviousDigest"], PREVIOUS)
-
     def test_live_rollback_verifies_previous_digest_and_smoke(self):
         c = self.context()
         c.update(PreviousTag="v1.7.2.9", PreviousDigest=PREVIOUS)
-        with patch.object(OPS, "deploy") as deploy, patch.object(OPS, "await_health", return_value={"Healthy": True, "NetworkOk": True, "AccountsReady": 3, "Digest": PREVIOUS}), patch.object(OPS, "smoke") as smoke, patch.object(OPS, "ssh"):
+        with patch.object(OPS, "deploy") as deploy, patch.object(OPS, "await_health", return_value={"Healthy": True, "NetworkOk": True, "TunnelNetworkOk": True, "MountsOk": True, "AccountsReady": 3, "Digest": PREVIOUS}), patch.object(OPS, "smoke") as smoke, patch.object(OPS, "publication_smoke") as publication, patch.object(OPS, "public_api_smoke", return_value={"Verified": True, "Status": "PASS"}), patch.object(OPS, "ssh"):
             r = OPS.execute("NAS_ROLLBACK", c)
             deploy.assert_called_once_with(c, "v1.7.2.9", PREVIOUS, reason="NAS_ROLLBACK_FAILURE")
             smoke.assert_called_once_with(c)
+            publication.assert_called_once_with(c)
             self.assertEqual(r["RestoredTag"], "v1.7.2.9")
-
 
     def test_workflow_failure_is_not_a_success(self):
         c = self.context()
@@ -612,27 +633,33 @@ class LiveBoundaryTests(unittest.TestCase):
         c.update(Digest=DIGEST, AccountsReady=3)
         info = {"State": {"Health": {"Status": "healthy"}},
                 "Config": {"Labels": {"com.docker.compose.project": "workbuddy2api-hub"}},
-                "NetworkSettings": {"Networks": {"workbuddy2api-hub_default": {}, "sub2api_sub2api-network": {}}},
+                "NetworkSettings": {"Networks": {"workbuddy2api-hub_default": {}, "sub2api_sub2api-network": {}, "mihomo-network": {}, "workbuddy2api-hub_publication": {}}},
+                "Mounts": [{"Destination": "/app/accounts", "Type": "bind", "Source": "/share/Container/workbuddy2api-hub/data/accounts"},
+                           {"Destination": "/app/usage", "Type": "bind", "Source": "/share/Container/workbuddy2api-hub/data/usage"}],
                 "Image": "img"}
+        cf = {"NetworkSettings": {"Networks": {"workbuddy2api-hub_publication": {}}}}
         image = {"RepoDigests": [OPS.IMAGE+"@"+DIGEST], "Config": {"Labels": {"org.opencontainers.image.revision": c["Sha"]}}}
-        for kind in ["health", "owner", "network", "digest", "revision", "accounts", "auth"]:
+        for kind in ["health", "owner", "network", "mount", "cloudflared", "digest", "revision", "accounts", "auth"]:
             with self.subTest(kind=kind):
-                i, m = copy.deepcopy(info), copy.deepcopy(image)
+                i, m, cf_i = copy.deepcopy(info), copy.deepcopy(image), copy.deepcopy(cf)
                 ready = {"AccountsReady": 3, "KeyRequired": True}
                 if kind == "health": i["State"]["Health"]["Status"] = "unhealthy"
                 if kind == "owner": i["Config"]["Labels"]["com.docker.compose.project"] = "other"
-                if kind == "network": i["NetworkSettings"]["Networks"].pop("sub2api_sub2api-network")
+                if kind == "network": i["NetworkSettings"]["Networks"].pop("workbuddy2api-hub_publication")
+                if kind == "mount": i["Mounts"][1]["Type"] = "volume"
+                if kind == "cloudflared": cf_i["NetworkSettings"]["Networks"]["unexpected"] = {}
                 if kind == "digest": m["RepoDigests"] = [OPS.IMAGE+"@"+PREVIOUS]
                 if kind == "revision": m["Config"]["Labels"]["org.opencontainers.image.revision"] = "wrong"
                 if kind == "accounts": ready["AccountsReady"] = 2
                 if kind == "auth": ready["KeyRequired"] = False
                 def ssh(ctx, script, **kwargs):
-                    if script.startswith("docker inspect"): return json.dumps([i])
+                    if script.startswith("docker ps -aq"): return "abcdef123456\n"
+                    if script.startswith("docker inspect abcdef123456"): return json.dumps([cf_i])
+                    if script.startswith("docker inspect wb-proxy"): return json.dumps([i])
                     if script.startswith("docker image"): return json.dumps([m])
                     return json.dumps(ready)
                 with patch.object(OPS, "ssh", side_effect=ssh):
                     with self.assertRaises(RuntimeError): OPS.health(c, DIGEST)
-
 
     def test_utf8_locale_independence(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -685,6 +712,29 @@ class LiveBoundaryTests(unittest.TestCase):
             with self.assertRaises(OPS.ExternalGateError) as cm:
                 OPS.ssh(c, "docker inspect wb-proxy\n")
             self.assertEqual(cm.exception.reason, "SSH_SESSION_FAILURE")
+
+    def test_remote_compose_contract_requires_publication(self):
+        c = self.context()
+        good = {"services": {"wb-proxy": {"networks": {"default": {}, "sub2api": {}, "mihomo-network": {}, "publication": {}}},
+                             "cloudflared": {"networks": {"publication": {}}}}}
+        with patch.object(OPS, "ssh", return_value=json.dumps(good)):
+            self.assertTrue(OPS.remote_compose_contract(c))
+        bad = copy.deepcopy(good)
+        bad["services"]["wb-proxy"]["networks"].pop("publication")
+        with patch.object(OPS, "ssh", return_value=json.dumps(bad)):
+            with self.assertRaises(OPS.ExternalGateError) as cm:
+                OPS.remote_compose_contract(c)
+            self.assertEqual(cm.exception.reason, "NAS_PREFLIGHT_FAILURE")
+
+    def test_deploy_uses_complete_compose_pair(self):
+        c = self.context()
+        scripts = []
+        with patch.object(OPS, "ssh", side_effect=lambda _c, script, **kwargs: scripts.append(script) or ""):
+            OPS.deploy(c, "v1.7.2.2", DIGEST)
+        joined = "\n".join(scripts)
+        self.assertIn("docker compose -f docker-compose.yml -f docker-compose.tunnel.yml config -q", joined)
+        self.assertIn("docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d", joined)
+
 
     def test_docker_free_ghcr_verification(self):
         c = self.context()

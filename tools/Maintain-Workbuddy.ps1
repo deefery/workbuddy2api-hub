@@ -57,7 +57,7 @@ function Show-AuditSummary {
 
 function Get-NasStatus {
     $dockerPath = '/share/CACHEDEV1_DATA/.qpkg/container-station/bin:/share/CACHEDEV1_DATA/.qpkg/container-station/usr/bin:$PATH'
-    $remote = "set -eu; export PATH=$dockerPath; cd '$NasDirectory'; printf 'tag='; sed -n 's/^WB_IMAGE_TAG=//p' .env; printf 'health='; docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' wb-proxy; printf 'image='; docker inspect -f '{{.Config.Image}}' wb-proxy"
+    $remote = "set -eu; export PATH=$dockerPath; cd '$NasDirectory'; printf 'tag='; sed -n 's/^WB_IMAGE_TAG=//p' .env; printf 'health='; docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' wb-proxy; printf 'image='; docker inspect -f '{{.Config.Image}}' wb-proxy; printf 'wb_networks='; docker inspect -f '{{json .NetworkSettings.Networks}}' wb-proxy; printf 'cloudflared_networks='; docker inspect -f '{{json .NetworkSettings.Networks}}' `$(docker compose -f docker-compose.yml -f docker-compose.tunnel.yml ps -q cloudflared)"
     $out = & ssh -o BatchMode=yes -o ConnectTimeout=10 $TargetNasHost $remote 2>$null
     if ($LASTEXITCODE -ne 0) { throw 'NAS status check failed; SSH details suppressed.' }
     (($out | ForEach-Object { "$_" }) -join "`n").Trim()
