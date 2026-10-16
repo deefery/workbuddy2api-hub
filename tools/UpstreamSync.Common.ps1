@@ -189,6 +189,64 @@ function Derive-NextForkVersion {
     $rev = if ($UpstreamBaseVer -eq $oldBase) { [int]$parts[3] + 1 } else { 1 }
     [PSCustomObject]@{ ProposedForkVersion = "$UpstreamBaseVer.$rev"; ProposedTag = "v$UpstreamBaseVer.$rev" }
 }
+function Get-KnownForkIdentityConflictState {
+    param([string]$Repo)
+    $u = Get-GitCommandOutput -Repo $Repo -Arguments @('diff', '--name-only', '--diff-filter=U')
+    if ($u.ExitCode -ne 0) { return [PSCustomObject]@{ IsKnown = $false; HasReadme = $false } }
+    $paths = @($u.StdOut -split '\r?\n' | Where-Object { $_ })
+    $allowed = @('README.md', 'wb_proxy.py', 'wrt/openwrt/workbuddy2api/Makefile')
+    if ($paths.Count -eq 0 -or @($paths | Where-Object { $_ -notin $allowed }).Count -ne 0) {
+        return [PSCustomObject]@{ IsKnown = $false; HasReadme = ($paths -contains 'README.md') }
+    }
+    $blockPattern = '(?ms)^<<<<<<< ours\r?\n(?<ours>.*?)^=======\r?\n(?<theirs>.*?)^>>>>>>> theirs\r?$'
+    foreach ($file in $paths) {
+        $co = Get-GitCommandOutput -Repo $Repo -Arguments @('checkout', '--conflict=merge', '--', $file)
+        if ($co.ExitCode -ne 0) { return [PSCustomObject]@{ IsKnown = $false; HasReadme = ($paths -contains 'README.md') } }
+        $text = Get-Content -LiteralPath (Join-Path $Repo $file) -Raw -Encoding UTF8
+        $blocks = [regex]::Matches($text, $blockPattern)
+        $markerCount = [regex]::Matches($text, '(?m)^<<<<<<< ours\r?$').Count
+        if ($blocks.Count -eq 0 -or $blocks.Count -ne $markerCount) {
+            return [PSCustomObject]@{ IsKnown = $false; HasReadme = ($paths -contains 'README.md') }
+        }
+        foreach ($block in $blocks) {
+            $ours = $block.Groups['ours'].Value.Trim()
+            $theirs = $block.Groups['theirs'].Value.Trim()
+            $known = $false
+            if ($file -eq 'wb_proxy.py') {
+                $oursNorm = [regex]::Replace($ours, 'wb-proxy/\d+\.\d+\.\d+\.\d+', 'wb-proxy/V')
+                $oursNorm = [regex]::Replace($oursNorm, '"version":\s*"\d+\.\d+\.\d+\.\d+"', '"version":"V"')
+                $theirsNorm = [regex]::Replace($theirs, 'wb-proxy/\d+\.\d+\.\d+', 'wb-proxy/V')
+                $theirsNorm = [regex]::Replace($theirsNorm, '"version":\s*"\d+\.\d+\.\d+"', '"version":"V"')
+                $hasOursIdentity = $ours -match 'wb-proxy/\d+\.\d+\.\d+\.\d+' -or $ours -match '"version":\s*"\d+\.\d+\.\d+\.\d+"'
+                $hasTheirsIdentity = $theirs -match 'wb-proxy/\d+\.\d+\.\d+' -or $theirs -match '"version":\s*"\d+\.\d+\.\d+"'
+                $known = $hasOursIdentity -and $hasTheirsIdentity -and ($oursNorm -ceq $theirsNorm)
+            } elseif ($file -eq 'wrt/openwrt/workbuddy2api/Makefile') {
+                $oursNorm = [regex]::Replace($ours, 'PKG_VERSION:=\d+\.\d+\.\d+\.\d+', 'PKG_VERSION:=V')
+                $theirsNorm = [regex]::Replace($theirs, 'PKG_VERSION:=\d+\.\d+\.\d+', 'PKG_VERSION:=V')
+                $known = ($ours -match 'PKG_VERSION:=\d+\.\d+\.\d+\.\d+') -and ($theirs -match 'PKG_VERSION:=\d+\.\d+\.\d+') -and ($oursNorm -ceq $theirsNorm)
+            } elseif ($file -eq 'README.md') {                $suite = '^- \d+ 个套件：\d+ 个 Python \+ \d+ 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。$'
+                $known = (($ours -match '^<a href="https://github\.com/deefery/workbuddy2api-hub/releases"><img .*Release-v\d+\.\d+\.\d+\.\d+.*>$' -and
+                           $theirs -match '^<a href="https://github\.com/ardeyouxipianyi/workbuddy2api-hub/releases"><img .*Release-v\d+\.\d+\.\d+.*>$') -or
+                          ($ours -match $suite -and $theirs -match $suite))
+            }
+            if (-not $known) { return [PSCustomObject]@{ IsKnown = $false; HasReadme = ($paths -contains 'README.md') } }
+        }
+    }
+    [PSCustomObject]@{ IsKnown = $true; HasReadme = ($paths -contains 'README.md') }
+}
+function Update-MergedReadmeSuiteCount {
+    param([string]$Repo)
+    $tests = @(Get-ChildItem -LiteralPath (Join-Path $Repo 'tests') -File | Where-Object { $_.Name -match '^_test_.*\.(py|js)$' })
+    $py = @($tests | Where-Object Extension -eq '.py').Count
+    $js = @($tests | Where-Object Extension -eq '.js').Count
+    $path = Join-Path $Repo 'README.md'
+    $doc = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+    $pattern = '(?m)^- \d+ 个套件：\d+ 个 Python \+ \d+ 个 JS；JS 需要 PATH 上有 `node`，缺失时会跳过并提示。$'
+    if ([regex]::Matches($doc, $pattern).Count -ne 1) { throw 'STOP: README suite-count line missing or ambiguous after auto conflict resolution' }
+    $replacement = "- $($tests.Count) 个套件：$py 个 Python + $js 个 JS；JS 需要 PATH 上有 ``node``，缺失时会跳过并提示。"
+    $doc = [regex]::Replace($doc, $pattern, $replacement)
+    [IO.File]::WriteAllText($path, $doc, (New-Object System.Text.UTF8Encoding($false)))
+}
 function Invoke-UpstreamGitIntegration {
     param([string]$Repo, [string]$UpstreamTargetSha, [string]$ProposedVersion, [hashtable]$Evidence)
     $main = Assert-SyncGit -Repo $Repo -Arguments @('rev-parse', 'main')
@@ -202,12 +260,26 @@ function Invoke-UpstreamGitIntegration {
     $path = Join-Path $Repo ".ai/runtime/integration-$id"
     $Evidence.integration_path = $path; $Evidence.integration_branch = $branch
     Assert-SyncGit -Repo $Repo -Arguments @('worktree', 'add', '-b', $branch, $path, $custom) | Out-Null
-    # Failed worktrees remain intact. Never switch or reset the operator checkout.
-    Assert-SyncGit -Repo $path -Arguments @('merge', '--no-ff', '-m', "Integrate upstream $UpstreamTargetSha", $UpstreamTargetSha) | Out-Null
+    # Failed worktrees remain intact. Known fork-identity-only conflicts may be retried with ours; every other conflict stays fail-closed.
+    $merge = Get-GitCommandOutput -Repo $path -Arguments @('merge', '--no-ff', '-m', "Integrate upstream $UpstreamTargetSha", $UpstreamTargetSha)
+    if ($merge.ExitCode -ne 0) {
+        $known = Get-KnownForkIdentityConflictState -Repo $path
+        if (-not $known.IsKnown) { throw 'STOP: Git merge failed' }
+        Assert-SyncGit -Repo $path -Arguments @('merge', '--abort') | Out-Null
+        Assert-SyncGit -Repo $path -Arguments @('merge', '--no-ff', '-X', 'ours', '-m', "Integrate upstream $UpstreamTargetSha", $UpstreamTargetSha) | Out-Null
+        if ($known.HasReadme) {
+            Update-MergedReadmeSuiteCount -Repo $path
+            $readmeStatus = Get-GitCommandOutput -Repo $path -Arguments @('status', '--porcelain', '--', 'README.md')
+            if ($readmeStatus.ExitCode -ne 0) { throw 'STOP: README status failed after auto conflict resolution' }
+            if ($readmeStatus.StdOut.Trim()) {
+                Assert-SyncGit -Repo $path -Arguments @('add', 'README.md') | Out-Null
+                Assert-SyncGit -Repo $path -Arguments @('commit', '--amend', '--no-edit') | Out-Null
+            }
+        }
+    }
     Assert-SyncGit -Repo $path -Arguments @('merge-base', '--is-ancestor', $UpstreamTargetSha, 'HEAD') | Out-Null
     [PSCustomObject]@{ Repo = $path; SyncBranch = $branch; OldMain = $main; OldCustom = $custom }
-}
-function Update-ReleaseIdentityFiles {
+}function Update-ReleaseIdentityFiles {
     param([string]$Repo, [string]$NewVersion)
     if ($NewVersion -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw 'STOP: Invalid fork identity' }
     $proxy = Join-Path $Repo 'wb_proxy.py'
@@ -248,7 +320,8 @@ function Test-T008DualNetworkConfig {
         $t -match '(?ms)^  cloudflared:.*?    networks:\s*\r?\n      - publication' -and
         $t -match '(?ms)^networks:\s*\r?\n  publication:\s*\r?\n    driver: bridge'
     [PSCustomObject]@{ IsValid = [bool]$valid; Reason = 'Requires NAS compose pair with wb-proxy default/sub2api/mihomo/publication and cloudflared publication-only' }
-}function Get-SyncPython {
+}
+function Get-SyncPython {
     param([string]$PythonExe)
     if ($PythonExe) { return $PythonExe }
     if ($env:WB_SYNC_PYTHON) { return $env:WB_SYNC_PYTHON }
@@ -351,7 +424,8 @@ function Invoke-ProductionGates {
                 if (-not $rb.Success -or -not $rb.Healthy -or -not $rb.SmokePassed -or -not $rb.PublicationSmokePassed -or
                     -not $rb.NetworkOk -or -not $rb.TunnelNetworkOk -or -not $rb.MountsOk -or
                     $rb.RestoredTag -cne $Context.PreviousTag -or $rb.Digest -cne $Context.PreviousDigest -or
-                    $rb.AccountsReady -lt $Context.AccountsReady) { throw 'Rollback verification failed' }                $Evidence.rollback_status = 'VERIFIED'; $Evidence.final_health = 'HEALTHY_PREVIOUS'; $Evidence.status = 'ROLLED_BACK'
+                    $rb.AccountsReady -lt $Context.AccountsReady) { throw 'Rollback verification failed' }
+                $Evidence.rollback_status = 'VERIFIED'; $Evidence.final_health = 'HEALTHY_PREVIOUS'; $Evidence.status = 'ROLLED_BACK'
             } catch {
                 $Evidence.rollback_status = 'FAILED_REQUIRES_MANUAL_RECOVERY'; $Evidence.final_health = 'UNKNOWN'; $Evidence.status = 'ROLLBACK_FAILED'
             }

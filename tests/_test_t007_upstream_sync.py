@@ -215,6 +215,27 @@ $mock = {
         self.assertIn("AA delta.txt", git(e["integration_path"], "status", "--porcelain"))
         self.assertEqual(self.actions(), [])
 
+    def test_known_version_identity_conflicts_auto_resolve(self):
+        git(self.repo, "checkout", "upstream-fixture")
+        (self.repo / "wb_proxy.py").write_text(
+            'server_version = "wb-proxy/1.7.3"\nmeta = {"version": "1.7.3"}\n')
+        recipe = self.repo / "wrt/openwrt/workbuddy2api/Makefile"
+        recipe.write_text("PKG_VERSION:=1.7.3\nPKG_RELEASE:=1\n")
+        git(self.repo, "add", "wb_proxy.py", "wrt/openwrt/workbuddy2api/Makefile")
+        git(self.repo, "commit", "-m", "upstream version bump")
+        self.up = git(self.repo, "rev-parse", "HEAD")
+        git(self.repo, "checkout", "custom/main")
+        git(self.repo, "update-ref", "refs/remotes/upstream/main", self.up)
+        rc, out = self.update(extra="-ReviewedUpstreamSha " + quote(self.up))
+        self.assertEqual(rc, 0, out)
+        e = self.evidence()
+        integrated = Path(e["integration_path"])
+        self.assertEqual(git(integrated, "diff", "--name-only", "--diff-filter=U"), "")
+        source = (integrated / "wb_proxy.py").read_text()
+        self.assertIn('server_version = "wb-proxy/1.7.3.1"', source)
+        self.assertIn('"version": "1.7.3.1"', source)
+        self.assertIn("PKG_VERSION:=1.7.3.1", (integrated / "wrt/openwrt/workbuddy2api/Makefile").read_text())
+
     def test_high_risk_force_cannot_bypass(self):
         git(self.repo, "checkout", "upstream-fixture")
         (self.repo / "wb_settings.py").write_text("# schema changed")
