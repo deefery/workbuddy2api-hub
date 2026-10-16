@@ -424,9 +424,9 @@ def request_ghcr(path, *, token=None, accept=None):
             token_url = m_realm.group(1)
             params = []
             if m_service:
-                params.append(f"service={urllib.parse.quote(m_service.group(1), safe="")}")
+                params.append(f"service={urllib.parse.quote(m_service.group(1), safe='')}")
             if m_scope:
-                params.append(f"scope={urllib.parse.quote(m_scope.group(1), safe="")}")
+                params.append(f"scope={urllib.parse.quote(m_scope.group(1), safe='')}")
             if params:
                 token_url += ("&" if "?" in token_url else "?") + "&".join(params)
             tok_req = urllib.request.Request(token_url, headers={"User-Agent": "workbuddy2api-hub-t007"})
